@@ -22,11 +22,24 @@ Then run:
 :CodexToggle
 ```
 
-No default keymap is registered.
+Additional session commands are available:
+
+```vim
+:CodexNew
+:CodexPrevious
+:CodexNext
+```
 
 ## Keymap
 
-Add your own mapping from your Neovim config:
+No global keymap is registered. Codex terminal buffers get terminal-local
+Snacks window keys for session management:
+
+- `<D-n>`: create a new Codex session for the current directory.
+- `<D-{>`: switch to the previous Codex session for the current directory.
+- `<D-}>`: switch to the next Codex session for the current directory.
+
+You can also add your own global mapping from your Neovim config:
 
 ```lua
 vim.keymap.set("n", "<leader>cc", function()
@@ -36,7 +49,8 @@ end, { desc = "Toggle Codex" })
 
 ## Configuration
 
-The defaults run `codex` from `vim.fn.getcwd()` and reuse one terminal session.
+The defaults run `codex` from `vim.fn.getcwd()`. Each resolved directory keeps
+its own active Codex session list.
 
 ```lua
 {
@@ -49,6 +63,11 @@ The defaults run `codex` from `vim.fn.getcwd()` and reuse one terminal session.
     cwd = function()
       return vim.fn.getcwd()
     end,
+    keys = {
+      new = "<D-n>",
+      previous = "<D-{>",
+      next = "<D-}>",
+    },
     win = {
       width = 0.35,
     },
@@ -66,6 +85,11 @@ require("codex").setup({
     return vim.fn.getcwd()
   end,
   count = 1,
+  keys = {
+    new = "<D-n>",
+    previous = "<D-{>",
+    next = "<D-}>",
+  },
   win = {
     position = "right",
     relative = "editor",
@@ -80,7 +104,8 @@ Supported options:
 - `command`: executable name or path. Defaults to `"codex"`.
 - `args`: command arguments. Defaults to `{}`.
 - `cwd`: working directory string or function returning a string. Defaults to `vim.fn.getcwd()`.
-- `count`: stable Snacks terminal count. Defaults to `1`.
+- `count`: first Snacks terminal count for each directory. Defaults to `1`.
+- `keys`: terminal-local session keys. Set an entry to `false` to disable it.
 - `win`: options merged into the Snacks window config.
 - `terminal`: options merged into the Snacks terminal config.
 
@@ -91,6 +116,10 @@ require("codex").toggle({
   cwd = vim.fn.getcwd(),
   args = { "--ask-for-approval", "on-request" },
 })
+
+require("codex").new()
+require("codex").previous()
+require("codex").next()
 ```
 
 `codex.nvim` requires `folke/snacks.nvim` and the `codex` executable to be
