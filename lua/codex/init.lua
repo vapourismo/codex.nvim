@@ -316,9 +316,85 @@ local function codex_win_keys(keys)
   return specs
 end
 
+local function counts_with_selected(cwd, selected_count)
+  local state = sessions[cwd]
+  local counts = {}
+
+  if state then
+    for _, count in ipairs(state.counts) do
+      table.insert(counts, count)
+    end
+  end
+
+  if selected_count then
+    local found = false
+    for _, count in ipairs(counts) do
+      if count == selected_count then
+        found = true
+        break
+      end
+    end
+    if not found then
+      table.insert(counts, selected_count)
+    end
+  end
+
+  return counts
+end
+
+local function render_winbar(counts, selected_count)
+  local parts = {}
+
+  for index, count in ipairs(counts) do
+    local group = "TabLineNum"
+    if count == selected_count then
+      group = "TabLineNumSel"
+    end
+    table.insert(parts, ("%%#%s# %d %%*"):format(group, index))
+  end
+
+  return table.concat(parts, " ")
+end
+
+local function codex_winbar(cwd, selected_count)
+  return render_winbar(counts_with_selected(cwd, selected_count), selected_count)
+end
+
+local function set_window_winbar(win, winbar)
+  if type(win) ~= "number" or not vim.api.nvim_win_is_valid(win) then
+    return
+  end
+
+  if type(vim.api.nvim_set_option_value) == "function" then
+    pcall(vim.api.nvim_set_option_value, "winbar", winbar, { win = win })
+  else
+    pcall(vim.api.nvim_win_set_option, win, "winbar", winbar)
+  end
+end
+
+local function refresh_cwd_winbars(cwd)
+  local state = sessions[cwd]
+  if not state then
+    return
+  end
+
+  for _, count in ipairs(state.counts) do
+    local terminal = state.terminals[count]
+    if terminal_is_codex(terminal) and terminal_is_visible(terminal) then
+      set_window_winbar(terminal.win, render_winbar(state.counts, count))
+    end
+  end
+end
+
 local function build_terminal_opts(opts, cwd, count)
   local win = vim.tbl_deep_extend("force", {}, opts.win or {})
   win.keys = vim.tbl_deep_extend("force", {}, win.keys or {}, codex_win_keys(opts.keys))
+  local wo = {}
+  if type(win.wo) == "table" then
+    wo = vim.tbl_deep_extend("force", {}, win.wo)
+  end
+  win.wo = wo
+  win.wo.winbar = codex_winbar(cwd, count)
 
   return vim.tbl_deep_extend("force", {}, opts.terminal or {}, {
     cwd = cwd,
@@ -375,6 +451,8 @@ local function remove_session(cwd, count)
 
   if #state.counts == 0 then
     sessions[cwd] = nil
+  else
+    refresh_cwd_winbars(cwd)
   end
 end
 
@@ -508,6 +586,7 @@ local function register_session(cwd, count, terminal)
   state.terminals[count] = terminal
   state.active = count
   track_terminal(terminal, cwd, count)
+  refresh_cwd_winbars(cwd)
 
   return terminal
 end

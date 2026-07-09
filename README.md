@@ -106,8 +106,12 @@ Supported options:
 - `cwd`: working directory string or function returning a string. Defaults to `vim.fn.getcwd()`.
 - `count`: first Snacks terminal count for each directory. Defaults to `1`.
 - `keys`: terminal-local session keys. Set an entry to `false` to disable it.
-- `win`: options merged into the Snacks window config.
+- `win`: options merged into the Snacks window config. `win.wo.winbar` is reserved and managed by `codex.nvim`.
 - `terminal`: options merged into the Snacks terminal config.
+
+Codex terminal windows show a managed winbar with numbered session boxes for the
+current directory. The visible terminal is highlighted, and session labels are
+displayed as `1`, `2`, `3`, ... in the current session order.
 
 Programmatic usage:
 

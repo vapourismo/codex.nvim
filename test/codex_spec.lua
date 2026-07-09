@@ -18,6 +18,17 @@ local function assert_truthy(actual, message)
   end
 end
 
+local function codex_winbar(selected, total)
+  local parts = {}
+
+  for index = 1, total do
+    local group = index == selected and "TabLineNumSel" or "TabLineNum"
+    table.insert(parts, ("%%#%s# %d %%*"):format(group, index))
+  end
+
+  return table.concat(parts, " ")
+end
+
 local function normalize_cwd(cwd)
   local uv = vim.uv or vim.loop
   local ok, realpath = pcall(uv.fs_realpath, cwd)
@@ -157,7 +168,9 @@ assert_eq(calls[1].opts.auto_close, false, "custom TermClose handling should dis
 assert_eq(calls[1].opts.win.position, "right", "default terminal should open on the right")
 assert_eq(calls[1].opts.win.relative, "editor", "default terminal should be editor-relative")
 assert_eq(calls[1].opts.win.width, 0.4, "default terminal width should be 40 percent")
-assert_eq(calls[1].opts.win.wo.winbar, "", "default terminal winbar should be empty")
+assert_eq(type(calls[1].opts.win.wo.winbar), "string", "Codex winbar should be a static string")
+assert_eq(calls[1].opts.win.wo.winbar:find("%{", 1, true), nil, "Codex winbar should not be an expression")
+assert_eq(calls[1].opts.win.wo.winbar, codex_winbar(1, 1), "default terminal winbar should show session 1")
 assert_eq(calls[1].opts.win.keys.codex_new[1], "<D-n>", "default new key should be installed")
 assert_eq(calls[1].opts.win.keys.codex_previous[1], "<D-{>", "default previous key should be installed")
 assert_eq(calls[1].opts.win.keys.codex_next[1], "<D-}>", "default next key should be installed")
@@ -201,7 +214,7 @@ assert_eq(calls[2].opts.cwd, normalize_cwd("/tmp/project"), "per-call cwd should
 assert_eq(calls[2].opts.count, 4, "configured count should be passed to Snacks")
 assert_eq(calls[2].opts.win.position, "left", "per-call win config should merge")
 assert_eq(calls[2].opts.win.width, 0.5, "configured win config should be preserved")
-assert_eq(calls[2].opts.win.wo.winbar, "", "default winbar should be preserved when win config merges")
+assert_eq(calls[2].opts.win.wo.winbar, codex_winbar(1, 1), "Codex winbar should be generated when win config merges")
 assert_eq(calls[2].opts.win.keys.q, "hide", "user Snacks keys should be preserved")
 assert_eq(calls[2].opts.win.keys.codex_new[1], "<leader>cn", "custom new key should be installed")
 assert_eq(calls[2].opts.win.keys.codex_previous, nil, "false should disable a Codex key")
@@ -220,7 +233,7 @@ codex.toggle({
 })
 
 assert_eq(#calls, 3, "third toggle should call Snacks again")
-assert_eq(calls[3].opts.win.wo.winbar, "Codex", "per-call winbar should override the empty default")
+assert_eq(calls[3].opts.win.wo.winbar, codex_winbar(1, 1), "Codex should reserve and override per-call winbar")
 
 vim.g.loaded_codex_nvim = 1
 
@@ -244,6 +257,7 @@ assert_eq(calls[4].opts.cwd, original_cwd, "deactivate should reset cwd")
 assert_eq(calls[4].opts.count, 1, "deactivate should reset count")
 assert_eq(calls[4].opts.win.position, "right", "deactivate should reset win position")
 assert_eq(calls[4].opts.win.width, 0.4, "deactivate should reset win width")
+assert_eq(calls[4].opts.win.wo.winbar, codex_winbar(1, 1), "deactivate should reset to the Codex winbar")
 assert_eq(calls[4].opts.win.keys.codex_new[1], "<D-n>", "deactivate should reset keys")
 
 local deactivate_again_ok, deactivate_again_return = pcall(codex.deactivate)
@@ -279,23 +293,47 @@ assert_eq(#calls, 3, "new should create new Snacks identities")
 assert_eq(calls[1].opts.count, 1, "first session should use configured count")
 assert_eq(calls[2].opts.count, 2, "second session should use the next count")
 assert_eq(calls[3].opts.count, 3, "third session should use the next count")
+assert_eq(calls[1].opts.win.wo.winbar, codex_winbar(1, 1), "first session should be selected in its winbar")
+assert_eq(calls[2].opts.win.wo.winbar, codex_winbar(2, 2), "second session should be selected in its winbar")
+assert_eq(calls[3].opts.win.wo.winbar, codex_winbar(3, 3), "third session should be selected in its winbar")
 assert_eq(first.hidden, 1, "new should hide the previously visible session")
 assert_eq(second.hidden, 1, "new should hide the previously visible new session")
 assert_eq(third.visible, true, "newest session should be visible")
+assert_eq(
+  vim.api.nvim_get_option_value("winbar", { win = third.win }),
+  codex_winbar(3, 3),
+  "visible terminal window should select the third session"
+)
 
 reloaded_codex.previous()
 assert_eq(#calls, 3, "previous should show existing sessions without creating terminals")
 assert_eq(third.hidden, 1, "previous should hide the active session")
 assert_eq(second.visible, true, "previous should show the previous session")
 assert_eq(second.shown, 1, "previous should call show on the target")
+assert_eq(
+  vim.api.nvim_get_option_value("winbar", { win = second.win }),
+  codex_winbar(2, 3),
+  "previous should update the visible winbar selection"
+)
 
 reloaded_codex.previous()
 assert_eq(first.visible, true, "previous should wrap to the first session")
 assert_eq(first.shown, 1, "wrapped previous should show the target")
+assert_eq(
+  vim.api.nvim_get_option_value("winbar", { win = first.win }),
+  codex_winbar(1, 3),
+  "wrapped previous should update the visible winbar selection"
+)
 
 reloaded_codex.next()
+assert_eq(#calls, 3, "next should show existing sessions without creating terminals")
 assert_eq(second.visible, true, "next should wrap forward through sessions")
 assert_eq(second.shown, 2, "next should show the target again")
+assert_eq(
+  vim.api.nvim_get_option_value("winbar", { win = second.win }),
+  codex_winbar(2, 3),
+  "next should update the visible winbar selection"
+)
 
 local dir_a = vim.fn.tempname()
 local dir_b = vim.fn.tempname()
