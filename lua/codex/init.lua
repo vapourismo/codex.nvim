@@ -20,10 +20,130 @@ local defaults = {
 
 local config = vim.deepcopy(defaults)
 local termclose_group = vim.api.nvim_create_augroup("codex.nvim.termclose", { clear = false })
+local dirchanged_group = vim.api.nvim_create_augroup("codex.nvim.dirchanged", { clear = true })
+local terminals = setmetatable({}, { __mode = "v" })
 
 local function notify_error(message)
   vim.notify("[codex.nvim] " .. message, vim.log.levels.ERROR)
 end
+
+local function terminal_buf(terminal)
+  if not terminal or type(terminal) ~= "table" or type(terminal.buf) ~= "number" then
+    return nil
+  end
+
+  if not vim.api.nvim_buf_is_valid(terminal.buf) then
+    return nil
+  end
+
+  return terminal.buf
+end
+
+local function terminal_is_codex(terminal)
+  local buf = terminal_buf(terminal)
+  if not buf then
+    return false
+  end
+
+  local ok, marked = pcall(vim.api.nvim_buf_get_var, buf, "codex_nvim_terminal")
+  return ok and marked == true
+end
+
+local function terminal_is_visible(terminal)
+  if type(terminal.valid) == "function" then
+    local ok, valid = pcall(terminal.valid, terminal)
+    if ok then
+      return valid == true
+    end
+  end
+
+  return type(terminal.win) == "number" and vim.api.nvim_win_is_valid(terminal.win)
+end
+
+local function terminal_is_in_current_tab(terminal)
+  if type(terminal.win) ~= "number" or not vim.api.nvim_win_is_valid(terminal.win) then
+    return true
+  end
+
+  return vim.api.nvim_win_get_tabpage(terminal.win) == vim.api.nvim_get_current_tabpage()
+end
+
+local function terminal_matches_dirchanged_scope(terminal, scope)
+  if scope == "global" then
+    return true
+  end
+
+  return terminal_is_in_current_tab(terminal)
+end
+
+local function track_terminal(terminal)
+  local buf = terminal_buf(terminal)
+  if not buf then
+    return
+  end
+
+  terminals[buf] = terminal
+  pcall(vim.api.nvim_buf_set_var, buf, "codex_nvim_terminal", true)
+end
+
+local function snacks_terminals()
+  local snacks = package.loaded.snacks
+  if type(snacks) ~= "table" or type(snacks.terminal) ~= "table" or type(snacks.terminal.list) ~= "function" then
+    return {}
+  end
+
+  local list_ok, list = pcall(snacks.terminal.list)
+  if not list_ok or type(list) ~= "table" then
+    return {}
+  end
+
+  return list
+end
+
+local function hide_if_visible(terminal, scope)
+  if
+    terminal_is_codex(terminal)
+    and terminal_is_visible(terminal)
+    and terminal_matches_dirchanged_scope(terminal, scope)
+    and type(terminal.hide) == "function"
+  then
+    pcall(terminal.hide, terminal)
+  end
+end
+
+local function hide_visible_terminals(scope)
+  local seen = {}
+
+  for _, terminal in ipairs(snacks_terminals()) do
+    local buf = terminal_buf(terminal)
+    if buf then
+      seen[buf] = true
+      if terminal_is_codex(terminal) then
+        terminals[buf] = terminal
+        hide_if_visible(terminal, scope)
+      end
+    end
+  end
+
+  for buf, terminal in pairs(terminals) do
+    if not terminal_is_codex(terminal) then
+      terminals[buf] = nil
+    elseif not seen[buf] then
+      hide_if_visible(terminal, scope)
+    end
+  end
+end
+
+vim.api.nvim_create_autocmd("DirChanged", {
+  group = dirchanged_group,
+  callback = function(event)
+    local scope = event.match
+    if type(vim.v.event) == "table" and type(vim.v.event.scope) == "string" then
+      scope = vim.v.event.scope
+    end
+    hide_visible_terminals(scope)
+  end,
+})
 
 local function validate(opts)
   opts = opts or {}
@@ -108,6 +228,8 @@ local function attach_termclose(terminal)
     return
   end
 
+  track_terminal(terminal)
+
   local ok, attached = pcall(vim.api.nvim_buf_get_var, buf, "codex_nvim_termclose")
   if ok and attached then
     return
@@ -120,6 +242,7 @@ local function attach_termclose(terminal)
     once = true,
     callback = function()
       vim.schedule(function()
+        terminals[buf] = nil
         if type(terminal.close) == "function" then
           pcall(terminal.close, terminal)
         end

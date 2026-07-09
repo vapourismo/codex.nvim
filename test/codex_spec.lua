@@ -19,6 +19,7 @@ vim.fn.setfperm(tmp .. "/codex", "rwxr-xr-x")
 
 local old_path = vim.env.PATH
 vim.env.PATH = tmp .. ":" .. old_path
+local original_cwd = vim.fn.getcwd()
 
 local calls = {}
 local terminals = {}
@@ -31,8 +32,18 @@ package.loaded.snacks = {
       }
       local terminal = {
         buf = vim.api.nvim_create_buf(false, true),
+        visible = true,
+        win = vim.api.nvim_get_current_win(),
+        valid = function(self)
+          return self.visible
+        end,
+        hide = function(self)
+          self.hidden = (self.hidden or 0) + 1
+          self.visible = false
+        end,
         close = function(self)
           self.closed = true
+          self.visible = false
         end,
       }
       terminals[#terminals + 1] = terminal
@@ -160,6 +171,22 @@ assert_eq(calls[5].opts.count, 1, "reloaded default count should be stable")
 assert_eq(calls[5].opts.win.position, "right", "reloaded terminal should open on the right")
 assert_eq(calls[5].opts.win.width, 0.4, "reloaded terminal width should be 40 percent")
 
+local changed_cwd = vim.fn.tempname()
+vim.fn.mkdir(changed_cwd, "p")
+vim.cmd("tcd " .. vim.fn.fnameescape(changed_cwd))
+local resolved_changed_cwd = vim.fn.getcwd()
+
+assert_eq(terminals[5].hidden, 1, "DirChanged should hide visible Codex terminals")
+assert_eq(terminals[5].closed, nil, "DirChanged should not close Codex terminals")
+assert_eq(vim.api.nvim_buf_is_valid(terminals[5].buf), true, "DirChanged should preserve terminal buffers")
+
+reloaded_codex.toggle()
+
+assert_eq(#calls, 6, "toggle should still create the cwd-targeted terminal after tcd")
+assert_eq(calls[6].opts.cwd, resolved_changed_cwd, "toggle after tcd should use the new tab cwd")
+
+vim.cmd("tcd " .. vim.fn.fnameescape(original_cwd))
+vim.fn.delete(changed_cwd, "rf")
 vim.env.PATH = old_path
 vim.fn.delete(tmp, "rf")
 
