@@ -56,6 +56,7 @@ assert_eq(calls[1].opts.auto_close, false, "custom TermClose handling should dis
 assert_eq(calls[1].opts.win.position, "right", "default terminal should open on the right")
 assert_eq(calls[1].opts.win.relative, "editor", "default terminal should be editor-relative")
 assert_eq(calls[1].opts.win.width, 0.4, "default terminal width should be 40 percent")
+assert_eq(calls[1].opts.win.wo.winbar, "", "default terminal winbar should be empty")
 
 codex.setup({
   command = "codex",
@@ -84,10 +85,22 @@ assert_eq(calls[2].opts.cwd, "/tmp/project", "per-call cwd should win")
 assert_eq(calls[2].opts.count, 4, "configured count should be passed to Snacks")
 assert_eq(calls[2].opts.win.position, "left", "per-call win config should merge")
 assert_eq(calls[2].opts.win.width, 0.5, "configured win config should be preserved")
+assert_eq(calls[2].opts.win.wo.winbar, "", "default winbar should be preserved when win config merges")
 assert_eq(calls[2].opts.env.CODEX_TEST, "1", "terminal config should be merged")
 assert_eq(calls[2].opts.start_insert, false, "terminal options should be passed through")
 assert_eq(calls[2].opts.auto_insert, false, "per-call terminal options should be merged")
 assert_eq(calls[2].opts.auto_close, false, "Snacks auto_close should stay disabled")
+
+codex.toggle({
+  win = {
+    wo = {
+      winbar = "Codex",
+    },
+  },
+})
+
+assert_eq(#calls, 3, "third toggle should call Snacks again")
+assert_eq(calls[3].opts.win.wo.winbar, "Codex", "per-call winbar should override the empty default")
 
 vim.env.PATH = old_path
 vim.fn.delete(tmp, "rf")

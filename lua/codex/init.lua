@@ -11,6 +11,9 @@ local defaults = {
     position = "right",
     relative = "editor",
     width = 0.4,
+    wo = {
+      winbar = "",
+    },
   },
   terminal = {},
 }
