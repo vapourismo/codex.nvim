@@ -19,7 +19,7 @@ local defaults = {
 }
 
 local config = vim.deepcopy(defaults)
-local termclose_group = vim.api.nvim_create_augroup("codex.nvim.termclose", { clear = true })
+local termclose_group = vim.api.nvim_create_augroup("codex.nvim.termclose", { clear = false })
 
 local function notify_error(message)
   vim.notify("[codex.nvim] " .. message, vim.log.levels.ERROR)
@@ -134,6 +134,14 @@ end
 
 function M.setup(opts)
   config = merge_options(defaults, opts)
+  return M
+end
+
+function M.deactivate()
+  pcall(vim.api.nvim_del_user_command, "CodexToggle")
+  vim.g.loaded_codex = nil
+  vim.g.loaded_codex_nvim = nil
+  config = vim.deepcopy(defaults)
   return M
 end
 
