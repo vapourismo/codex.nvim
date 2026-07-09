@@ -136,6 +136,7 @@ package.loaded.snacks = {
 vim.cmd.runtime("plugin/codex.lua")
 assert_eq(vim.fn.exists(":CodexToggle"), 2, ":CodexToggle command should exist")
 assert_eq(vim.fn.exists(":CodexNew"), 2, ":CodexNew command should exist")
+assert_eq(vim.fn.exists(":CodexClose"), 2, ":CodexClose command should exist")
 assert_eq(vim.fn.exists(":CodexPrevious"), 2, ":CodexPrevious command should exist")
 assert_eq(vim.fn.exists(":CodexNext"), 2, ":CodexNext command should exist")
 assert_eq(vim.g.loaded_codex, 1, "Lazy-compatible loaded guard should be set")
@@ -145,6 +146,7 @@ vim.g.loaded_codex = nil
 vim.cmd.runtime("plugin/codex.lua")
 assert_eq(vim.fn.exists(":CodexToggle"), 2, "manual re-source should preserve :CodexToggle")
 assert_eq(vim.fn.exists(":CodexNew"), 2, "manual re-source should preserve :CodexNew")
+assert_eq(vim.fn.exists(":CodexClose"), 2, "manual re-source should preserve :CodexClose")
 assert_eq(vim.fn.exists(":CodexPrevious"), 2, "manual re-source should preserve :CodexPrevious")
 assert_eq(vim.fn.exists(":CodexNext"), 2, "manual re-source should preserve :CodexNext")
 assert_eq(vim.g.loaded_codex, 1, "manual re-source should restore loaded guard")
@@ -153,6 +155,7 @@ local codex = require("codex")
 assert_eq(type(codex.setup), "function", "setup should be a function")
 assert_eq(type(codex.toggle), "function", "toggle should be a function")
 assert_eq(type(codex.new), "function", "new should be a function")
+assert_eq(type(codex.close), "function", "close should be a function")
 assert_eq(type(codex.previous), "function", "previous should be a function")
 assert_eq(type(codex.next), "function", "next should be a function")
 assert_eq(type(codex.deactivate), "function", "deactivate should be a function")
@@ -172,10 +175,13 @@ assert_eq(type(calls[1].opts.win.wo.winbar), "string", "Codex winbar should be a
 assert_eq(calls[1].opts.win.wo.winbar:find("%{", 1, true), nil, "Codex winbar should not be an expression")
 assert_eq(calls[1].opts.win.wo.winbar, codex_winbar(1, 1), "default terminal winbar should show session 1")
 assert_eq(calls[1].opts.win.keys.codex_new[1], "<D-n>", "default new key should be installed")
+assert_eq(calls[1].opts.win.keys.codex_close[1], "<D-w>", "default close key should be installed")
 assert_eq(calls[1].opts.win.keys.codex_previous[1], "<D-{>", "default previous key should be installed")
 assert_eq(calls[1].opts.win.keys.codex_next[1], "<D-}>", "default next key should be installed")
 assert_list(calls[1].opts.win.keys.codex_new.mode, { "n", "t" }, "Codex keys should be normal and terminal mode")
+assert_list(calls[1].opts.win.keys.codex_close.mode, { "n", "t" }, "Codex close key should be normal and terminal mode")
 assert_eq(type(calls[1].opts.win.keys.codex_new[2]), "function", "Codex key rhs should be callable")
+assert_eq(type(calls[1].opts.win.keys.codex_close[2]), "function", "Codex close key rhs should be callable")
 
 codex.setup({
   command = "codex",
@@ -185,6 +191,7 @@ codex.setup({
   end,
   count = 4,
   keys = {
+    close = "<leader>cw",
     new = "<leader>cn",
     previous = false,
     next = "<leader>cN",
@@ -217,6 +224,7 @@ assert_eq(calls[2].opts.win.width, 0.5, "configured win config should be preserv
 assert_eq(calls[2].opts.win.wo.winbar, codex_winbar(1, 1), "Codex winbar should be generated when win config merges")
 assert_eq(calls[2].opts.win.keys.q, "hide", "user Snacks keys should be preserved")
 assert_eq(calls[2].opts.win.keys.codex_new[1], "<leader>cn", "custom new key should be installed")
+assert_eq(calls[2].opts.win.keys.codex_close[1], "<leader>cw", "custom close key should be installed")
 assert_eq(calls[2].opts.win.keys.codex_previous, nil, "false should disable a Codex key")
 assert_eq(calls[2].opts.win.keys.codex_next[1], "<leader>cN", "custom next key should be installed")
 assert_eq(calls[2].opts.env.CODEX_TEST, "1", "terminal config should be merged")
@@ -242,6 +250,7 @@ assert_eq(deactivate_ok, true, "deactivate should not throw")
 assert_eq(deactivate_return, codex, "deactivate should return the module table")
 assert_eq(vim.fn.exists(":CodexToggle"), 0, "deactivate should remove :CodexToggle")
 assert_eq(vim.fn.exists(":CodexNew"), 0, "deactivate should remove :CodexNew")
+assert_eq(vim.fn.exists(":CodexClose"), 0, "deactivate should remove :CodexClose")
 assert_eq(vim.fn.exists(":CodexPrevious"), 0, "deactivate should remove :CodexPrevious")
 assert_eq(vim.fn.exists(":CodexNext"), 0, "deactivate should remove :CodexNext")
 assert_eq(vim.g.loaded_codex, nil, "deactivate should clear Lazy-compatible loaded guard")
@@ -259,6 +268,7 @@ assert_eq(calls[4].opts.win.position, "right", "deactivate should reset win posi
 assert_eq(calls[4].opts.win.width, 0.4, "deactivate should reset win width")
 assert_eq(calls[4].opts.win.wo.winbar, codex_winbar(1, 1), "deactivate should reset to the Codex winbar")
 assert_eq(calls[4].opts.win.keys.codex_new[1], "<D-n>", "deactivate should reset keys")
+assert_eq(calls[4].opts.win.keys.codex_close[1], "<D-w>", "deactivate should reset the close key")
 
 local deactivate_again_ok, deactivate_again_return = pcall(codex.deactivate)
 assert_eq(deactivate_again_ok, true, "deactivate should be idempotent")
@@ -271,6 +281,7 @@ vim.cmd.runtime("plugin/codex.lua")
 
 assert_eq(vim.fn.exists(":CodexToggle"), 2, "reload should restore :CodexToggle")
 assert_eq(vim.fn.exists(":CodexNew"), 2, "reload should restore :CodexNew")
+assert_eq(vim.fn.exists(":CodexClose"), 2, "reload should restore :CodexClose")
 assert_eq(vim.fn.exists(":CodexPrevious"), 2, "reload should restore :CodexPrevious")
 assert_eq(vim.fn.exists(":CodexNext"), 2, "reload should restore :CodexNext")
 assert_eq(vim.g.loaded_codex, 1, "reload should restore loaded guard")
@@ -279,9 +290,19 @@ local reloaded_codex = require("codex")
 assert_eq(type(reloaded_codex.setup), "function", "reloaded setup should be a function")
 assert_eq(type(reloaded_codex.toggle), "function", "reloaded toggle should be a function")
 assert_eq(type(reloaded_codex.new), "function", "reloaded new should be a function")
+assert_eq(type(reloaded_codex.close), "function", "reloaded close should be a function")
 assert_eq(type(reloaded_codex.previous), "function", "reloaded previous should be a function")
 assert_eq(type(reloaded_codex.next), "function", "reloaded next should be a function")
 assert_eq(type(reloaded_codex.deactivate), "function", "reloaded deactivate should be a function")
+
+reset_fake_snacks()
+reloaded_codex.setup({
+  keys = {
+    close = false,
+  },
+})
+reloaded_codex.toggle()
+assert_eq(calls[1].opts.win.keys.codex_close, nil, "false should disable the close key")
 
 reset_fake_snacks()
 reloaded_codex.setup()
@@ -385,6 +406,86 @@ reloaded_codex.previous()
 
 assert_eq(calls[3].opts.cwd, resolved_a, "navigation from an untracked Codex buffer should use that buffer's cwd")
 assert_eq(calls[3].opts.count, 1, "navigation fallback should use the first count for that cwd")
+
+vim.api.nvim_set_current_buf(normal_buf)
+assert_eq(reloaded_codex.close(), nil, "close should return nil outside a Codex terminal")
+
+reset_fake_snacks()
+reloaded_codex.deactivate()
+reloaded_codex.setup({ cwd = dir_a })
+
+local explicit_first = reloaded_codex.toggle()
+local explicit_second = reloaded_codex.new()
+local explicit_third = reloaded_codex.new()
+reloaded_codex.previous()
+vim.api.nvim_set_current_buf(explicit_second.buf)
+local replacement = reloaded_codex.close()
+
+assert_eq(replacement, explicit_third, "close should activate the next same-directory session")
+assert_eq(#calls, 3, "close should not create a replacement Snacks terminal")
+assert_eq(explicit_second.closed, true, "close should close only the current Codex terminal")
+assert_eq(vim.api.nvim_buf_is_valid(explicit_second.buf), false, "close should delete the current Codex buffer")
+assert_eq(explicit_first.closed, nil, "close should not close earlier same-directory sessions")
+assert_eq(explicit_third.closed, nil, "close should not close the replacement session")
+assert_eq(explicit_third.visible, true, "close should leave the replacement visible")
+assert_eq(explicit_third.shown, 1, "close should show the replacement session")
+assert_eq(explicit_third.focused, 1, "close should focus the replacement session")
+assert_eq(
+  vim.api.nvim_get_option_value("winbar", { win = explicit_third.win }),
+  codex_winbar(2, 2),
+  "close should remove the closed count from the replacement winbar"
+)
+
+vim.api.nvim_set_current_buf(explicit_third.buf)
+reloaded_codex.new()
+assert_eq(calls[4].opts.count, 2, "close should free the closed count for reuse")
+
+reset_fake_snacks()
+reloaded_codex.deactivate()
+reloaded_codex.setup({ cwd = dir_a })
+
+local wrap_first = reloaded_codex.toggle()
+local wrap_second = reloaded_codex.new()
+local wrap_third = reloaded_codex.new()
+vim.api.nvim_set_current_buf(wrap_third.buf)
+local wrap_replacement = reloaded_codex.close()
+
+assert_eq(wrap_replacement, wrap_second, "close should fall back to the previous session at the end of the list")
+assert_eq(#calls, 3, "wrapped close should not create a replacement Snacks terminal")
+assert_eq(wrap_first.closed, nil, "wrapped close should not close earlier sibling sessions")
+assert_eq(wrap_second.visible, true, "wrapped close should show the previous replacement")
+assert_eq(wrap_third.closed, true, "wrapped close should close the selected terminal")
+
+reset_fake_snacks()
+reloaded_codex.deactivate()
+reloaded_codex.setup({
+  cwd = dir_a,
+  count = 4,
+})
+
+local only_session = reloaded_codex.toggle()
+vim.api.nvim_set_current_buf(only_session.buf)
+local only_result = reloaded_codex.close()
+assert_eq(only_result, only_session, "close should return the closed terminal when there is no replacement")
+assert_eq(only_session.closed, true, "close should close the only session")
+assert_eq(vim.api.nvim_buf_is_valid(only_session.buf), false, "close should delete the only session buffer")
+
+reloaded_codex.toggle()
+assert_eq(calls[2].opts.count, 4, "toggle after closing the only session should restart at the first count")
+
+reset_fake_snacks()
+reloaded_codex.deactivate()
+reloaded_codex.setup({ cwd = dir_a })
+
+local dir_a_only = reloaded_codex.toggle()
+local dir_b_session = reloaded_codex.toggle({ cwd = dir_b })
+vim.api.nvim_set_current_buf(dir_a_only.buf)
+reloaded_codex.close()
+
+assert_eq(dir_a_only.closed, true, "close should close the current directory session")
+assert_eq(dir_b_session.closed, nil, "close should not close sessions from other directories")
+assert_eq(dir_b_session.shown, nil, "close should not activate a session from another directory")
+assert_eq(dir_b_session.focused, nil, "close should not focus a session from another directory")
 
 vim.api.nvim_set_current_buf(normal_buf)
 reset_fake_snacks()

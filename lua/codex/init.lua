@@ -8,6 +8,7 @@ local defaults = {
   end,
   count = 1,
   keys = {
+    close = "<D-w>",
     new = "<D-n>",
     previous = "<D-{>",
     next = "<D-}>",
@@ -305,6 +306,10 @@ local function codex_win_keys(keys)
     return M.new()
   end, "New Codex session")
 
+  add("close", keys.close, function()
+    return M.close()
+  end, "Close Codex session")
+
   add("previous", keys.previous, function()
     return M.previous()
   end, "Previous Codex session")
@@ -506,6 +511,76 @@ local function prune_state(cwd)
   return sessions[cwd]
 end
 
+local function replacement_count(state, closing_count)
+  if not state or #state.counts == 0 then
+    return nil
+  end
+
+  local closing_index = index_of_count(state, closing_count)
+  if closing_index then
+    for index = closing_index + 1, #state.counts do
+      local count = state.counts[index]
+      if count ~= closing_count and terminal_buf(state.terminals[count]) then
+        return count
+      end
+    end
+
+    for index = closing_index - 1, 1, -1 do
+      local count = state.counts[index]
+      if count ~= closing_count and terminal_buf(state.terminals[count]) then
+        return count
+      end
+    end
+  end
+
+  for _, count in ipairs(state.counts) do
+    if count ~= closing_count and terminal_buf(state.terminals[count]) then
+      return count
+    end
+  end
+
+  return nil
+end
+
+local function current_codex_session()
+  local buf = vim.api.nvim_get_current_buf()
+  local terminal = terminals[buf]
+  local marked = terminal_is_codex(terminal)
+
+  if not marked then
+    local ok, value = pcall(vim.api.nvim_buf_get_var, buf, "codex_nvim_terminal")
+    marked = ok and value == true
+  end
+
+  if not marked then
+    return nil
+  end
+
+  local cwd_ok, cwd = pcall(vim.api.nvim_buf_get_var, buf, "codex_nvim_cwd")
+  if not cwd_ok or type(cwd) ~= "string" or cwd == "" then
+    return nil
+  end
+
+  local count_ok, count = pcall(vim.api.nvim_buf_get_var, buf, "codex_nvim_count")
+  if not count_ok or type(count) ~= "number" then
+    return nil
+  end
+
+  if not terminal then
+    local state = sessions[cwd]
+    if state then
+      terminal = state.terminals[count]
+    end
+  end
+
+  return {
+    buf = buf,
+    cwd = cwd,
+    count = count,
+    terminal = terminal,
+  }
+end
+
 local function allocate_count(state, first_count)
   local used = {}
   for _, count in ipairs(state.counts) do
@@ -598,6 +673,48 @@ local function open_session(opts, cwd, count, snacks_terminal)
   return terminal
 end
 
+local function show_existing_session(cwd, count)
+  local state = sessions[cwd]
+  if not state then
+    return nil
+  end
+
+  local terminal = state.terminals[count]
+  if not terminal_buf(terminal) then
+    return nil
+  end
+
+  hide_visible_terminals("tab")
+
+  if type(terminal.show) == "function" then
+    local ok, shown = pcall(terminal.show, terminal)
+    if ok then
+      terminal = shown or terminal
+    end
+  end
+
+  if type(terminal.focus) == "function" then
+    pcall(terminal.focus, terminal)
+  end
+
+  register_session(cwd, count, terminal)
+  attach_termclose(terminal)
+
+  return terminal
+end
+
+local function close_terminal_buffer(buf, terminal)
+  if type(terminal) == "table" and type(terminal.close) == "function" then
+    pcall(terminal.close, terminal)
+  end
+
+  if vim.api.nvim_buf_is_valid(buf) then
+    pcall(vim.api.nvim_buf_delete, buf, { force = true })
+  end
+
+  pcall(vim.cmd.checktime)
+end
+
 local function show_session(opts, cwd, count, snacks_terminal)
   local state = state_for(cwd)
   local terminal = state.terminals[count]
@@ -665,6 +782,7 @@ end
 function M.deactivate()
   pcall(vim.api.nvim_del_user_command, "CodexToggle")
   pcall(vim.api.nvim_del_user_command, "CodexNew")
+  pcall(vim.api.nvim_del_user_command, "CodexClose")
   pcall(vim.api.nvim_del_user_command, "CodexPrevious")
   pcall(vim.api.nvim_del_user_command, "CodexNext")
   vim.g.loaded_codex = nil
@@ -701,6 +819,30 @@ function M.new(opts)
 
   hide_visible_terminals("tab")
   return open_session(opts_merged, cwd, count, snacks_terminal)
+end
+
+function M.close()
+  local current = current_codex_session()
+  if not current then
+    return nil
+  end
+
+  local state = prune_state(current.cwd)
+  if state and not terminal_buf(current.terminal) then
+    current.terminal = state.terminals[current.count]
+  end
+
+  local replacement
+  local count = replacement_count(state, current.count)
+  if count then
+    replacement = show_existing_session(current.cwd, count)
+  end
+
+  terminals[current.buf] = nil
+  remove_session(current.cwd, current.count)
+  close_terminal_buffer(current.buf, current.terminal)
+
+  return replacement or current.terminal or true
 end
 
 local function navigate(opts, delta)

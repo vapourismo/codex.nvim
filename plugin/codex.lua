@@ -18,6 +18,13 @@ end, {
   force = true,
 })
 
+vim.api.nvim_create_user_command("CodexClose", function()
+  require("codex").close()
+end, {
+  desc = "Close the current Codex CLI session",
+  force = true,
+})
+
 vim.api.nvim_create_user_command("CodexPrevious", function()
   require("codex").previous()
 end, {

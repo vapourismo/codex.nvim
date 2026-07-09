@@ -26,6 +26,7 @@ Additional session commands are available:
 
 ```vim
 :CodexNew
+:CodexClose
 :CodexPrevious
 :CodexNext
 ```
@@ -36,6 +37,7 @@ No global keymap is registered. Codex terminal buffers get terminal-local
 Snacks window keys for session management:
 
 - `<D-n>`: create a new Codex session for the current directory.
+- `<D-w>`: close the current Codex session.
 - `<D-{>`: switch to the previous Codex session for the current directory.
 - `<D-}>`: switch to the next Codex session for the current directory.
 
@@ -64,6 +66,7 @@ its own active Codex session list.
       return vim.fn.getcwd()
     end,
     keys = {
+      close = "<D-w>",
       new = "<D-n>",
       previous = "<D-{>",
       next = "<D-}>",
@@ -86,6 +89,7 @@ require("codex").setup({
   end,
   count = 1,
   keys = {
+    close = "<D-w>",
     new = "<D-n>",
     previous = "<D-{>",
     next = "<D-}>",
@@ -122,6 +126,7 @@ require("codex").toggle({
 })
 
 require("codex").new()
+require("codex").close()
 require("codex").previous()
 require("codex").next()
 ```
