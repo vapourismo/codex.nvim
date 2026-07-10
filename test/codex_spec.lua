@@ -18,6 +18,12 @@ local function assert_truthy(actual, message)
   end
 end
 
+local function assert_contains(actual, expected, message)
+  if type(actual) ~= "string" or not actual:find(expected, 1, true) then
+    error(("%s\nexpected %s to contain: %s"):format(message or "string differs", vim.inspect(actual), expected), 2)
+  end
+end
+
 local function codex_winbar(selected, total)
   local parts = {}
 
@@ -139,6 +145,7 @@ assert_eq(vim.fn.exists(":CodexNew"), 2, ":CodexNew command should exist")
 assert_eq(vim.fn.exists(":CodexClose"), 2, ":CodexClose command should exist")
 assert_eq(vim.fn.exists(":CodexPrevious"), 2, ":CodexPrevious command should exist")
 assert_eq(vim.fn.exists(":CodexNext"), 2, ":CodexNext command should exist")
+assert_eq(vim.fn.exists(":CodexReference"), 2, ":CodexReference command should exist")
 assert_eq(vim.g.loaded_codex, 1, "Lazy-compatible loaded guard should be set")
 assert_eq(vim.g.loaded_codex_nvim, nil, "legacy loaded guard should not be set")
 
@@ -149,6 +156,7 @@ assert_eq(vim.fn.exists(":CodexNew"), 2, "manual re-source should preserve :Code
 assert_eq(vim.fn.exists(":CodexClose"), 2, "manual re-source should preserve :CodexClose")
 assert_eq(vim.fn.exists(":CodexPrevious"), 2, "manual re-source should preserve :CodexPrevious")
 assert_eq(vim.fn.exists(":CodexNext"), 2, "manual re-source should preserve :CodexNext")
+assert_eq(vim.fn.exists(":CodexReference"), 2, "manual re-source should preserve :CodexReference")
 assert_eq(vim.g.loaded_codex, 1, "manual re-source should restore loaded guard")
 
 local codex = require("codex")
@@ -158,6 +166,7 @@ assert_eq(type(codex.new), "function", "new should be a function")
 assert_eq(type(codex.close), "function", "close should be a function")
 assert_eq(type(codex.previous), "function", "previous should be a function")
 assert_eq(type(codex.next), "function", "next should be a function")
+assert_eq(type(codex.reference), "function", "reference should be a function")
 assert_eq(type(codex.deactivate), "function", "deactivate should be a function")
 
 codex.setup()
@@ -253,6 +262,7 @@ assert_eq(vim.fn.exists(":CodexNew"), 0, "deactivate should remove :CodexNew")
 assert_eq(vim.fn.exists(":CodexClose"), 0, "deactivate should remove :CodexClose")
 assert_eq(vim.fn.exists(":CodexPrevious"), 0, "deactivate should remove :CodexPrevious")
 assert_eq(vim.fn.exists(":CodexNext"), 0, "deactivate should remove :CodexNext")
+assert_eq(vim.fn.exists(":CodexReference"), 0, "deactivate should remove :CodexReference")
 assert_eq(vim.g.loaded_codex, nil, "deactivate should clear Lazy-compatible loaded guard")
 assert_eq(vim.g.loaded_codex_nvim, nil, "deactivate should clear legacy loaded guard")
 assert_eq(terminals[1].closed, nil, "deactivate should not close existing terminals")
@@ -284,6 +294,7 @@ assert_eq(vim.fn.exists(":CodexNew"), 2, "reload should restore :CodexNew")
 assert_eq(vim.fn.exists(":CodexClose"), 2, "reload should restore :CodexClose")
 assert_eq(vim.fn.exists(":CodexPrevious"), 2, "reload should restore :CodexPrevious")
 assert_eq(vim.fn.exists(":CodexNext"), 2, "reload should restore :CodexNext")
+assert_eq(vim.fn.exists(":CodexReference"), 2, "reload should restore :CodexReference")
 assert_eq(vim.g.loaded_codex, 1, "reload should restore loaded guard")
 
 local reloaded_codex = require("codex")
@@ -293,6 +304,7 @@ assert_eq(type(reloaded_codex.new), "function", "reloaded new should be a functi
 assert_eq(type(reloaded_codex.close), "function", "reloaded close should be a function")
 assert_eq(type(reloaded_codex.previous), "function", "reloaded previous should be a function")
 assert_eq(type(reloaded_codex.next), "function", "reloaded next should be a function")
+assert_eq(type(reloaded_codex.reference), "function", "reloaded reference should be a function")
 assert_eq(type(reloaded_codex.deactivate), "function", "reloaded deactivate should be a function")
 
 reset_fake_snacks()
@@ -524,6 +536,201 @@ assert_eq(#calls, 2, "toggle should still create the cwd-targeted terminal after
 assert_eq(calls[2].opts.cwd, resolved_changed_cwd, "toggle after tcd should use the new tab cwd")
 
 vim.cmd("tcd " .. vim.fn.fnameescape(original_cwd))
+
+local reference_root = vim.fn.tempname()
+local reference_project = reference_root .. "/project"
+vim.fn.mkdir(reference_project .. "/src", "p")
+vim.fn.mkdir(reference_root .. "/shared", "p")
+
+local reference_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_name(reference_buf, reference_project .. "/src/example.lua")
+vim.api.nvim_buf_set_lines(reference_buf, 0, -1, false, { "first line", "aébc", "last" })
+
+local outside_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_name(outside_buf, reference_root .. "/shared/out.lua")
+vim.api.nvim_buf_set_lines(outside_buf, 0, -1, false, { "outside" })
+
+local unnamed_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_lines(unnamed_buf, 0, -1, false, { "unnamed" })
+
+local incompatible_buf = vim.api.nvim_create_buf(false, true)
+vim.api.nvim_buf_set_name(incompatible_buf, "//codex-server/share/incompatible.lua")
+vim.api.nvim_buf_set_lines(incompatible_buf, 0, -1, false, { "incompatible" })
+
+local escape = vim.api.nvim_replace_termcodes("<Esc>", true, false, true)
+local blockwise = vim.api.nvim_replace_termcodes("<C-v>", true, false, true)
+
+local function leave_visual()
+  local mode = vim.fn.mode(1)
+  if mode == "v" or mode == "V" or mode == "\22" then
+    vim.cmd.normal({ args = { escape }, bang = true })
+  end
+end
+
+local function select_visual(buf, mode, start_line, start_column, end_line, end_column)
+  leave_visual()
+  vim.api.nvim_set_current_buf(buf)
+  vim.api.nvim_win_set_cursor(0, { start_line, start_column - 1 })
+  vim.cmd.normal({ args = { mode }, bang = true })
+  vim.api.nvim_win_set_cursor(0, { end_line, end_column - 1 })
+end
+
+local notifications = {}
+local original_notify = vim.notify
+vim.notify = function(message, level)
+  notifications[#notifications + 1] = { message = message, level = level }
+end
+
+local sent = {}
+local channels = {}
+local original_get_option_value = vim.api.nvim_get_option_value
+local original_chan_send = vim.api.nvim_chan_send
+vim.api.nvim_get_option_value = function(name, opts)
+  if name == "channel" and type(opts) == "table" and opts.buf then
+    return channels[opts.buf] or 0
+  end
+  return original_get_option_value(name, opts)
+end
+vim.api.nvim_chan_send = function(channel, data)
+  sent[#sent + 1] = { channel = channel, data = data }
+end
+
+reset_fake_snacks()
+reloaded_codex.deactivate()
+vim.cmd.runtime("plugin/codex.lua")
+reloaded_codex.setup({ cwd = reference_project })
+vim.api.nvim_set_current_buf(reference_buf)
+local reference_first = reloaded_codex.toggle()
+channels[reference_first.buf] = 101
+
+select_visual(reference_buf, "V", 1, 1, 2, 1)
+local linewise_result = reloaded_codex.reference()
+assert_eq(linewise_result, reference_first, "linewise reference should return the active terminal")
+assert_eq(sent[#sent].channel, 101, "linewise reference should target the active terminal channel")
+assert_eq(sent[#sent].data, "src/example.lua:1-2", "linewise reference should include the selected line range")
+assert_eq(reference_first.shown, 1, "reference should show the existing active terminal")
+assert_eq(reference_first.focused, 1, "reference should focus the existing active terminal")
+assert_eq(#calls, 1, "reference should not create another terminal")
+
+select_visual(reference_buf, "v", 2, 2, 2, 4)
+reloaded_codex.reference()
+assert_eq(
+  sent[#sent].data,
+  "src/example.lua:2:2-2:4",
+  "characterwise reference should use 1-based byte columns for multibyte text"
+)
+
+select_visual(reference_buf, "v", 2, 1, 2, 5)
+reloaded_codex.reference()
+assert_eq(
+  sent[#sent].data,
+  "src/example.lua:2",
+  "full single-line characterwise reference should collapse to a single-line reference"
+)
+
+select_visual(reference_buf, "v", 1, 1, 3, 4)
+reloaded_codex.reference()
+assert_eq(
+  sent[#sent].data,
+  "src/example.lua:1-3",
+  "full multi-line characterwise reference should collapse to linewise form"
+)
+
+select_visual(reference_buf, "V", 3, 1, 3, 1)
+leave_visual()
+vim.cmd("'<,'>CodexReference")
+assert_eq(sent[#sent].data, "src/example.lua:3", ":CodexReference should normalize a single-line range")
+
+select_visual(outside_buf, "V", 1, 1, 1, 1)
+reloaded_codex.reference()
+assert_eq(sent[#sent].data, "../shared/out.lua:1", "references outside the Codex cwd should retain ../ segments")
+
+leave_visual()
+vim.api.nvim_set_current_buf(reference_buf)
+local reference_second = reloaded_codex.new()
+channels[reference_second.buf] = 202
+select_visual(reference_buf, "v", 1, 2, 1, 5)
+local active_result = reloaded_codex.reference()
+assert_eq(active_result, reference_second, "reference should return the active session when several exist")
+assert_eq(sent[#sent].channel, 202, "reference should send to the active session when several exist")
+assert_eq(sent[#sent].data, "src/example.lua:1:2-1:5", "reference should send exactly the formatted text")
+assert_eq(reference_second.shown, 1, "reference should show the active session")
+assert_eq(reference_second.focused, 1, "reference should focus the active session")
+assert_eq(#calls, 2, "reference should not create a terminal when several sessions exist")
+
+leave_visual()
+reset_fake_snacks()
+reloaded_codex.deactivate()
+reloaded_codex.setup({ cwd = reference_project })
+select_visual(reference_buf, "V", 1, 1, 1, 1)
+local sends_before_missing = #sent
+assert_eq(reloaded_codex.reference(), nil, "reference should fail when no matching session exists")
+assert_eq(#calls, 0, "reference should never create a missing session")
+assert_eq(#sent, sends_before_missing, "reference should not send when no matching session exists")
+assert_contains(
+  notifications[#notifications].message,
+  "no active Codex session",
+  "missing session should produce a plugin error notification"
+)
+
+leave_visual()
+vim.cmd.runtime("plugin/codex.lua")
+reloaded_codex.setup({ cwd = reference_project })
+vim.api.nvim_set_current_buf(reference_buf)
+local error_terminal = reloaded_codex.toggle()
+channels[error_terminal.buf] = 303
+
+select_visual(unnamed_buf, "V", 1, 1, 1, 1)
+assert_eq(reloaded_codex.reference(), nil, "reference should reject unnamed buffers")
+assert_contains(notifications[#notifications].message, "named buffer", "unnamed buffers should produce a plugin error")
+
+select_visual(reference_buf, blockwise, 1, 1, 2, 2)
+assert_eq(reloaded_codex.reference(), nil, "reference should reject blockwise selections")
+assert_contains(notifications[#notifications].message, "blockwise", "blockwise selection should produce a plugin error")
+
+select_visual(incompatible_buf, "V", 1, 1, 1, 1)
+assert_eq(reloaded_codex.reference(), nil, "reference should reject paths on incompatible roots")
+assert_contains(
+  notifications[#notifications].message,
+  "incompatible filesystem roots",
+  "incompatible roots should produce a plugin error"
+)
+
+channels[error_terminal.buf] = nil
+select_visual(reference_buf, "V", 1, 1, 1, 1)
+local sends_before_invalid_channel = #sent
+assert_eq(reloaded_codex.reference(), nil, "reference should reject an invalid terminal channel")
+assert_eq(#sent, sends_before_invalid_channel, "invalid terminal channel should not receive reference text")
+assert_contains(notifications[#notifications].message, "valid channel", "invalid channel should produce a plugin error")
+
+leave_visual()
+vim.api.nvim_set_current_buf(reference_buf)
+vim.cmd("CodexReference")
+assert_contains(
+  notifications[#notifications].message,
+  "must be called from Visual mode",
+  "non-visual command use should produce a plugin error"
+)
+
+vim.fn.setpos("'<", { 0, 0, 0, 0 })
+vim.fn.setpos("'>", { 0, 0, 0, 0 })
+assert_eq(
+  reloaded_codex.reference({ _command = { range = 2, line1 = 0, line2 = 0 } }),
+  nil,
+  "reference should reject missing visual marks"
+)
+assert_contains(notifications[#notifications].message, "missing or invalid", "invalid marks should produce a plugin error")
+
+leave_visual()
+vim.notify = original_notify
+vim.api.nvim_get_option_value = original_get_option_value
+vim.api.nvim_chan_send = original_chan_send
+
+vim.api.nvim_buf_delete(reference_buf, { force = true })
+vim.api.nvim_buf_delete(outside_buf, { force = true })
+vim.api.nvim_buf_delete(unnamed_buf, { force = true })
+vim.api.nvim_buf_delete(incompatible_buf, { force = true })
+vim.fn.delete(reference_root, "rf")
 vim.fn.delete(changed_cwd, "rf")
 vim.fn.delete(dir_a, "rf")
 vim.fn.delete(dir_b, "rf")

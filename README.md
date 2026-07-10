@@ -31,6 +31,10 @@ Additional session commands are available:
 :CodexNext
 ```
 
+Use `:CodexReference` from Visual mode to insert the selected file range into
+the active Codex prompt. It supports characterwise and linewise selections and
+does not submit the prompt.
+
 ## Keymap
 
 No global keymap is registered. Codex terminal buffers get terminal-local
@@ -47,6 +51,10 @@ You can also add your own global mapping from your Neovim config:
 vim.keymap.set("n", "<leader>cc", function()
   require("codex").toggle()
 end, { desc = "Toggle Codex" })
+
+vim.keymap.set("x", "<leader>cr", ":CodexReference<CR>", {
+  desc = "Reference selection in Codex",
+})
 ```
 
 ## Configuration
@@ -129,6 +137,7 @@ require("codex").new()
 require("codex").close()
 require("codex").previous()
 require("codex").next()
+require("codex").reference() -- call from characterwise or linewise Visual mode
 ```
 
 `codex.nvim` requires `folke/snacks.nvim` and the `codex` executable to be

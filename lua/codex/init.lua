@@ -234,6 +234,69 @@ local function normalize_cwd(cwd)
   return cwd
 end
 
+local function path_root_and_parts(path)
+  path = path:gsub("\\", "/")
+
+  local root
+  local rest
+  local server, share, unc_rest = path:match("^//([^/]+)/([^/]+)(.*)$")
+  if server and share then
+    root = "//" .. server .. "/" .. share
+    rest = unc_rest
+  else
+    local drive, drive_rest = path:match("^([A-Za-z]:)(.*)$")
+    if drive then
+      root = drive:lower()
+      rest = drive_rest
+    elseif path:sub(1, 1) == "/" then
+      root = "/"
+      rest = path:sub(2)
+    else
+      return nil, nil
+    end
+  end
+
+  local parts = {}
+  for part in rest:gmatch("[^/]+") do
+    table.insert(parts, part)
+  end
+
+  return root, parts
+end
+
+local function relative_path(cwd, path)
+  local cwd_root, cwd_parts = path_root_and_parts(cwd)
+  local path_root, path_parts = path_root_and_parts(path)
+  if not cwd_root or not path_root or cwd_root:lower() ~= path_root:lower() then
+    return nil
+  end
+
+  local case_insensitive = cwd_root ~= "/"
+  local common = 0
+  while common < #cwd_parts and common < #path_parts do
+    local cwd_part = cwd_parts[common + 1]
+    local path_part = path_parts[common + 1]
+    if case_insensitive then
+      cwd_part = cwd_part:lower()
+      path_part = path_part:lower()
+    end
+    if cwd_part ~= path_part then
+      break
+    end
+    common = common + 1
+  end
+
+  local parts = {}
+  for _ = common + 1, #cwd_parts do
+    table.insert(parts, "..")
+  end
+  for index = common + 1, #path_parts do
+    table.insert(parts, path_parts[index])
+  end
+
+  return #parts == 0 and "." or table.concat(parts, "/")
+end
+
 local function resolve_cwd(cwd)
   if type(cwd) == "function" then
     local ok, resolved = pcall(cwd)
@@ -703,6 +766,155 @@ local function show_existing_session(cwd, count)
   return terminal
 end
 
+local function selection_position(buf, position, linewise)
+  if type(position) ~= "table" then
+    return nil
+  end
+
+  local position_buf = tonumber(position[1])
+  local line = tonumber(position[2])
+  local column = tonumber(position[3])
+  if
+    not position_buf
+    or (position_buf ~= 0 and position_buf ~= buf)
+    or not line
+    or line < 1
+    or line > vim.api.nvim_buf_line_count(buf)
+  then
+    return nil
+  end
+
+  if linewise then
+    return { line = line, column = 1 }
+  end
+
+  if not column or column < 1 then
+    return nil
+  end
+
+  local text = vim.api.nvim_buf_get_lines(buf, line - 1, line, true)[1]
+  if text == nil then
+    return nil
+  end
+
+  local max_column = math.max(#text, 1)
+  if column == vim.v.maxcol then
+    column = max_column
+  elseif column > max_column then
+    return nil
+  end
+
+  return { line = line, column = column, line_length = #text }
+end
+
+local function visual_selection(command)
+  local mode
+  local start_position
+  local end_position
+
+  if command then
+    if command.range ~= 2 then
+      notify_error("CodexReference must be called from Visual mode")
+      return nil
+    end
+
+    mode = vim.fn.visualmode()
+    start_position = vim.fn.getpos("'<")
+    end_position = vim.fn.getpos("'>")
+    if
+      type(command.line1) ~= "number"
+      or type(command.line2) ~= "number"
+      or start_position[2] ~= command.line1
+      or end_position[2] ~= command.line2
+    then
+      notify_error("CodexReference must be called from Visual mode")
+      return nil
+    end
+  else
+    mode = vim.fn.mode(1)
+    start_position = vim.fn.getpos("v")
+    end_position = vim.fn.getpos(".")
+  end
+
+  if mode == "\22" then
+    notify_error("blockwise selections are not supported")
+    return nil
+  end
+  if mode ~= "v" and mode ~= "V" then
+    notify_error("a characterwise or linewise visual selection is required")
+    return nil
+  end
+
+  local buf = vim.api.nvim_get_current_buf()
+  local linewise = mode == "V"
+  local first = selection_position(buf, start_position, linewise)
+  local last = selection_position(buf, end_position, linewise)
+  if not first or not last then
+    notify_error("visual selection is missing or invalid")
+    return nil
+  end
+
+  if first.line > last.line or (first.line == last.line and first.column > last.column) then
+    first, last = last, first
+  end
+
+  return {
+    buf = buf,
+    linewise = linewise,
+    first = first,
+    last = last,
+  }
+end
+
+local function selection_reference(selection, cwd)
+  local name = vim.api.nvim_buf_get_name(selection.buf)
+  if name == "" then
+    notify_error("visual selection must be in a named buffer")
+    return nil
+  end
+
+  local path = normalize_cwd(vim.fn.fnamemodify(name, ":p"))
+  local relative = relative_path(cwd, path)
+  if not relative then
+    notify_error("buffer and Codex cwd are on incompatible filesystem roots")
+    return nil
+  end
+
+  local first = selection.first
+  local last = selection.last
+  local linewise = selection.linewise
+    or (first.column == 1 and last.column == math.max(last.line_length, 1))
+
+  if linewise then
+    if first.line == last.line then
+      return ("%s:%d"):format(relative, first.line)
+    end
+    return ("%s:%d-%d"):format(relative, first.line, last.line)
+  end
+
+  return ("%s:%d:%d-%d:%d"):format(relative, first.line, first.column, last.line, last.column)
+end
+
+local function terminal_channel(terminal)
+  local buf = terminal_buf(terminal)
+  if not buf then
+    return nil
+  end
+
+  local ok, channel
+  if type(vim.api.nvim_get_option_value) == "function" then
+    ok, channel = pcall(vim.api.nvim_get_option_value, "channel", { buf = buf })
+  else
+    ok, channel = pcall(vim.api.nvim_buf_get_option, buf, "channel")
+  end
+
+  if not ok or type(channel) ~= "number" or channel < 1 or channel % 1 ~= 0 then
+    return nil
+  end
+
+  return channel
+end
+
 local function close_terminal_buffer(buf, terminal)
   if type(terminal) == "table" and type(terminal.close) == "function" then
     pcall(terminal.close, terminal)
@@ -785,6 +997,7 @@ function M.deactivate()
   pcall(vim.api.nvim_del_user_command, "CodexClose")
   pcall(vim.api.nvim_del_user_command, "CodexPrevious")
   pcall(vim.api.nvim_del_user_command, "CodexNext")
+  pcall(vim.api.nvim_del_user_command, "CodexReference")
   vim.g.loaded_codex = nil
   vim.g.loaded_codex_nvim = nil
   config = vim.deepcopy(defaults)
@@ -873,6 +1086,51 @@ end
 
 function M.next(opts)
   return navigate(opts, 1)
+end
+
+function M.reference(opts)
+  local command = type(opts) == "table" and opts._command or nil
+  local selection = visual_selection(command)
+  if not selection then
+    return nil
+  end
+
+  local cwd = resolve_cwd(config.cwd)
+  if not cwd then
+    return nil
+  end
+
+  local reference = selection_reference(selection, cwd)
+  if not reference then
+    return nil
+  end
+
+  local state = prune_state(cwd)
+  local count = state and state.active or nil
+  if not count or not terminal_buf(state.terminals[count]) then
+    notify_error("no active Codex session exists for the configured directory")
+    return nil
+  end
+
+  local terminal = show_existing_session(cwd, count)
+  if not terminal then
+    notify_error("no active Codex session exists for the configured directory")
+    return nil
+  end
+
+  local channel = terminal_channel(terminal)
+  if not channel then
+    notify_error("active Codex terminal has no valid channel")
+    return nil
+  end
+
+  local ok, err = pcall(vim.api.nvim_chan_send, channel, reference)
+  if not ok then
+    notify_error("failed to send reference to Codex terminal: " .. tostring(err))
+    return nil
+  end
+
+  return terminal
 end
 
 return M

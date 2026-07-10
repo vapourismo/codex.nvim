@@ -38,3 +38,11 @@ end, {
   desc = "Show the next Codex CLI session",
   force = true,
 })
+
+vim.api.nvim_create_user_command("CodexReference", function(command)
+  require("codex").reference({ _command = command })
+end, {
+  desc = "Insert the visual selection as a Codex file reference",
+  force = true,
+  range = true,
+})
