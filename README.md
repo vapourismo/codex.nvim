@@ -121,9 +121,10 @@ Supported options:
 - `win`: options merged into the Snacks window config. `win.wo.winbar` is reserved and managed by `codex.nvim`.
 - `terminal`: options merged into the Snacks terminal config.
 
-Codex terminal windows show a managed winbar with numbered session boxes for the
-current directory. The visible terminal is highlighted, and session labels are
-displayed as `1`, `2`, `3`, ... in the current session order.
+When more than one session exists for the current directory, Codex terminal
+windows show a managed winbar with numbered session boxes. The visible terminal
+is highlighted, and session labels are displayed as `1`, `2`, `3`, ... in the
+current session order.
 
 Programmatic usage:
 

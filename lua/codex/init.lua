@@ -411,6 +411,10 @@ local function counts_with_selected(cwd, selected_count)
 end
 
 local function render_winbar(counts, selected_count)
+  if #counts < 2 then
+    return ""
+  end
+
   local parts = {}
 
   for index, count in ipairs(counts) do

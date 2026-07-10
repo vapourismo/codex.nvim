@@ -25,6 +25,10 @@ local function assert_contains(actual, expected, message)
 end
 
 local function codex_winbar(selected, total)
+  if total < 2 then
+    return ""
+  end
+
   local parts = {}
 
   for index = 1, total do
@@ -182,7 +186,7 @@ assert_eq(calls[1].opts.win.relative, "editor", "default terminal should be edit
 assert_eq(calls[1].opts.win.width, 0.4, "default terminal width should be 40 percent")
 assert_eq(type(calls[1].opts.win.wo.winbar), "string", "Codex winbar should be a static string")
 assert_eq(calls[1].opts.win.wo.winbar:find("%{", 1, true), nil, "Codex winbar should not be an expression")
-assert_eq(calls[1].opts.win.wo.winbar, codex_winbar(1, 1), "default terminal winbar should show session 1")
+assert_eq(calls[1].opts.win.wo.winbar, "", "default terminal winbar should be hidden for one session")
 assert_eq(calls[1].opts.win.keys.codex_new[1], "<D-n>", "default new key should be installed")
 assert_eq(calls[1].opts.win.keys.codex_close[1], "<D-w>", "default close key should be installed")
 assert_eq(calls[1].opts.win.keys.codex_previous[1], "<D-{>", "default previous key should be installed")
@@ -230,7 +234,7 @@ assert_eq(calls[2].opts.cwd, normalize_cwd("/tmp/project"), "per-call cwd should
 assert_eq(calls[2].opts.count, 4, "configured count should be passed to Snacks")
 assert_eq(calls[2].opts.win.position, "left", "per-call win config should merge")
 assert_eq(calls[2].opts.win.width, 0.5, "configured win config should be preserved")
-assert_eq(calls[2].opts.win.wo.winbar, codex_winbar(1, 1), "Codex winbar should be generated when win config merges")
+assert_eq(calls[2].opts.win.wo.winbar, "", "Codex winbar should stay hidden when win config merges")
 assert_eq(calls[2].opts.win.keys.q, "hide", "user Snacks keys should be preserved")
 assert_eq(calls[2].opts.win.keys.codex_new[1], "<leader>cn", "custom new key should be installed")
 assert_eq(calls[2].opts.win.keys.codex_close[1], "<leader>cw", "custom close key should be installed")
@@ -250,7 +254,7 @@ codex.toggle({
 })
 
 assert_eq(#calls, 3, "third toggle should call Snacks again")
-assert_eq(calls[3].opts.win.wo.winbar, codex_winbar(1, 1), "Codex should reserve and override per-call winbar")
+assert_eq(calls[3].opts.win.wo.winbar, "", "Codex should clear a per-call winbar for one session")
 
 vim.g.loaded_codex_nvim = 1
 
@@ -276,7 +280,7 @@ assert_eq(calls[4].opts.cwd, original_cwd, "deactivate should reset cwd")
 assert_eq(calls[4].opts.count, 1, "deactivate should reset count")
 assert_eq(calls[4].opts.win.position, "right", "deactivate should reset win position")
 assert_eq(calls[4].opts.win.width, 0.4, "deactivate should reset win width")
-assert_eq(calls[4].opts.win.wo.winbar, codex_winbar(1, 1), "deactivate should reset to the Codex winbar")
+assert_eq(calls[4].opts.win.wo.winbar, "", "deactivate should reset to a hidden Codex winbar")
 assert_eq(calls[4].opts.win.keys.codex_new[1], "<D-n>", "deactivate should reset keys")
 assert_eq(calls[4].opts.win.keys.codex_close[1], "<D-w>", "deactivate should reset the close key")
 
@@ -326,7 +330,7 @@ assert_eq(#calls, 3, "new should create new Snacks identities")
 assert_eq(calls[1].opts.count, 1, "first session should use configured count")
 assert_eq(calls[2].opts.count, 2, "second session should use the next count")
 assert_eq(calls[3].opts.count, 3, "third session should use the next count")
-assert_eq(calls[1].opts.win.wo.winbar, codex_winbar(1, 1), "first session should be selected in its winbar")
+assert_eq(calls[1].opts.win.wo.winbar, "", "first session should not display a winbar")
 assert_eq(calls[2].opts.win.wo.winbar, codex_winbar(2, 2), "second session should be selected in its winbar")
 assert_eq(calls[3].opts.win.wo.winbar, codex_winbar(3, 3), "third session should be selected in its winbar")
 assert_eq(first.hidden, 1, "new should hide the previously visible session")
@@ -390,12 +394,16 @@ reloaded_codex.new({ cwd = dir_b })
 assert_eq(#calls, 4, "separate directories should create their own Snacks sessions")
 assert_eq(calls[1].opts.cwd, resolved_a, "first directory should use resolved cwd")
 assert_eq(calls[1].opts.count, 4, "first directory should use configured first count")
+assert_eq(calls[1].opts.win.wo.winbar, "", "first directory should hide its single-session winbar")
 assert_eq(calls[2].opts.cwd, resolved_a, "new session should stay in first directory")
 assert_eq(calls[2].opts.count, 5, "first directory should allocate its next count")
+assert_eq(calls[2].opts.win.wo.winbar, codex_winbar(2, 2), "first directory should show its two-session winbar")
 assert_eq(calls[3].opts.cwd, resolved_b, "second directory should use its own cwd")
 assert_eq(calls[3].opts.count, 4, "second directory should reuse configured count independently")
+assert_eq(calls[3].opts.win.wo.winbar, "", "second directory should hide its single-session winbar")
 assert_eq(calls[4].opts.cwd, resolved_b, "new session should stay in second directory")
 assert_eq(calls[4].opts.count, 5, "second directory should allocate independently")
+assert_eq(calls[4].opts.win.wo.winbar, codex_winbar(2, 2), "second directory should show its two-session winbar")
 
 local normal_buf = vim.api.nvim_create_buf(false, true)
 vim.api.nvim_set_current_buf(normal_buf)
@@ -467,6 +475,18 @@ assert_eq(#calls, 3, "wrapped close should not create a replacement Snacks termi
 assert_eq(wrap_first.closed, nil, "wrapped close should not close earlier sibling sessions")
 assert_eq(wrap_second.visible, true, "wrapped close should show the previous replacement")
 assert_eq(wrap_third.closed, true, "wrapped close should close the selected terminal")
+
+local final_winbar
+local close_wrap_second = wrap_second.close
+wrap_second.close = function(self)
+  final_winbar = vim.api.nvim_get_option_value("winbar", { win = wrap_first.win })
+  return close_wrap_second(self)
+end
+vim.api.nvim_set_current_buf(wrap_second.buf)
+local final_replacement = reloaded_codex.close()
+
+assert_eq(final_replacement, wrap_first, "close should retain the final same-directory session")
+assert_eq(final_winbar, "", "close should hide the winbar when one session remains")
 
 reset_fake_snacks()
 reloaded_codex.deactivate()
