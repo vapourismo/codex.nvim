@@ -150,6 +150,10 @@ end
 vim.api.nvim_create_autocmd("DirChanged", {
   group = dirchanged_group,
   callback = function(event)
+    if type(vim.v.event) == "table" and vim.v.event.changed_window == true then
+      return
+    end
+
     local scope = event.match
     if type(vim.v.event) == "table" and type(vim.v.event.scope) == "string" then
       scope = vim.v.event.scope

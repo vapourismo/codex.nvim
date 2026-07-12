@@ -539,6 +539,30 @@ reset_fake_snacks()
 reloaded_codex.deactivate()
 vim.cmd.runtime("plugin/codex.lua")
 reloaded_codex.setup()
+
+local navigation_cwd = vim.fn.tempname()
+local other_navigation_cwd = vim.fn.tempname()
+vim.fn.mkdir(navigation_cwd, "p")
+vim.fn.mkdir(other_navigation_cwd, "p")
+vim.cmd("tcd " .. vim.fn.fnameescape(navigation_cwd))
+
+local navigation_terminal = reloaded_codex.toggle()
+local terminal_tab = vim.api.nvim_get_current_tabpage()
+vim.cmd.tabnew()
+local other_tab = vim.api.nvim_get_current_tabpage()
+vim.cmd("tcd " .. vim.fn.fnameescape(other_navigation_cwd))
+vim.api.nvim_set_current_tabpage(terminal_tab)
+
+assert_eq(navigation_terminal.hidden, nil, "switching tabs should not hide visible Codex terminals")
+assert_eq(navigation_terminal.visible, true, "switching tabs should preserve terminal visibility")
+
+vim.api.nvim_set_current_tabpage(other_tab)
+vim.cmd.tabclose()
+
+reset_fake_snacks()
+reloaded_codex.deactivate()
+vim.cmd.runtime("plugin/codex.lua")
+reloaded_codex.setup()
 local dirchanged_terminal = reloaded_codex.toggle()
 
 local changed_cwd = vim.fn.tempname()
