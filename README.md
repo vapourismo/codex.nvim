@@ -9,7 +9,7 @@ With [lazy.nvim](https://github.com/folke/lazy.nvim):
 
 ```lua
 {
-  "your-name/codex.nvim",
+  "vapourismo/codex.nvim",
   dependencies = {
     "folke/snacks.nvim",
   },
@@ -64,7 +64,7 @@ its own active Codex session list.
 
 ```lua
 {
-  "your-name/codex.nvim",
+  "vapourismo/codex.nvim",
   dependencies = {
     "folke/snacks.nvim",
   },
