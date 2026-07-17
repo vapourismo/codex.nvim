@@ -787,6 +787,7 @@ vim.fn.jobstart = restored_jobstart
 vim.fn.termopen = restored_termopen
 
 local original_stdout_calls = {}
+local terminal_stdout
 local unrelated_opts
 local notification_terminal
 package.loaded.snacks = {
@@ -801,15 +802,16 @@ package.loaded.snacks = {
         buf = vim.api.nvim_create_buf(false, true),
       }
       vim.api.nvim_buf_call(notification_terminal.buf, function()
+        terminal_stdout = function(job_id, data, event)
+          original_stdout_calls[#original_stdout_calls + 1] = {
+            job_id = job_id,
+            data = data,
+            event = event,
+          }
+        end
         vim.fn.termopen(cmd, {
           cwd = opts.cwd,
-          on_stdout = function(job_id, data, event)
-            original_stdout_calls[#original_stdout_calls + 1] = {
-              job_id = job_id,
-              data = data,
-              event = event,
-            }
-          end,
+          on_stdout = terminal_stdout,
         })
       end)
       return notification_terminal
@@ -820,21 +822,45 @@ package.loaded.snacks = {
   },
 }
 
-local notification_events = {}
+local legacy_notification_events = 0
 local notification_group = vim.api.nvim_create_augroup("codex.nvim.test.notifications", { clear = true })
 vim.api.nvim_create_autocmd("User", {
   group = notification_group,
   pattern = "CodexNotification",
-  callback = function(event)
-    notification_events[#notification_events + 1] = vim.deepcopy(event.data)
+  callback = function()
+    legacy_notification_events = legacy_notification_events + 1
   end,
 })
 
 reloaded_codex.deactivate()
 reloaded_codex.setup({
+  args = { "--unobserved-test" },
+  cwd = dir_a,
+  count = 6,
+})
+local unobserved_terminal = reloaded_codex.toggle()
+assert_eq(
+  launched.opts.on_stdout,
+  terminal_stdout,
+  "launches without on_notification should retain their original stdout callback"
+)
+launched.opts.on_stdout(42, { "\27]9;ignored message\7" }, "stdout")
+assert_eq(#original_stdout_calls, 1, "unobserved output should still reach the original stdout callback")
+assert_eq(legacy_notification_events, 0, "unobserved notifications should not emit legacy User events")
+
+local notification_calls = {}
+original_stdout_calls = {}
+reloaded_codex.deactivate()
+reloaded_codex.setup({
   args = { "--notification-test" },
   cwd = dir_a,
   count = 6,
+  on_notification = function(data)
+    if data.message == "callback failure" then
+      error("simulated notification callback failure")
+    end
+    notification_calls[#notification_calls + 1] = vim.deepcopy(data)
+  end,
 })
 local observed_terminal = reloaded_codex.toggle()
 
@@ -849,38 +875,70 @@ local function stdout(data)
 end
 
 stdout({ "plain text\27[31mred\27[0m\27]0;title\7\27Pignored\7\27\\" })
-assert_eq(#notification_events, 0, "plain output and unrelated control sequences should not emit notifications")
+assert_eq(#notification_calls, 0, "plain output and unrelated control sequences should not invoke the callback")
 
 stdout({ "\27]9;direct message\7" })
-assert_eq(#notification_events, 1, "direct OSC 9 should emit once without a duplicate BEL event")
-assert_eq(notification_events[1].method, "osc9", "direct OSC 9 should report its method")
-assert_eq(notification_events[1].message, "direct message", "direct OSC 9 should decode its message")
+assert_eq(#notification_calls, 1, "direct OSC 9 should invoke once without a duplicate BEL notification")
+assert_eq(notification_calls[1].method, "osc9", "direct OSC 9 should report its method")
+assert_eq(notification_calls[1].message, "direct message", "direct OSC 9 should decode its message")
 
 stdout({ "\27]9;split " })
-assert_eq(#notification_events, 1, "an incomplete OSC 9 should wait for its terminator")
+assert_eq(#notification_calls, 1, "an incomplete OSC 9 should wait for its terminator")
 stdout({ "message\7" })
-assert_eq(#notification_events, 2, "a chunk-split OSC 9 should emit once")
-assert_eq(notification_events[2].message, "split message", "chunk-split OSC 9 should preserve its message")
+assert_eq(#notification_calls, 2, "a chunk-split OSC 9 should invoke once")
+assert_eq(notification_calls[2].message, "split message", "chunk-split OSC 9 should preserve its message")
 
 stdout({ "\27Ptmux;\27\27]9;tmux message\7\27\\" })
-assert_eq(#notification_events, 3, "tmux-wrapped OSC 9 should emit once")
-assert_eq(notification_events[3].method, "osc9", "tmux-wrapped OSC 9 should report its method")
-assert_eq(notification_events[3].message, "tmux message", "tmux-wrapped OSC 9 should decode its message")
+assert_eq(#notification_calls, 3, "tmux-wrapped OSC 9 should invoke once")
+assert_eq(notification_calls[3].method, "osc9", "tmux-wrapped OSC 9 should report its method")
+assert_eq(notification_calls[3].message, "tmux message", "tmux-wrapped OSC 9 should decode its message")
 
-stdout({ "before\7\7after" })
-assert_eq(#notification_events, 5, "consecutive standalone BEL bytes should each emit")
-assert_eq(notification_events[4].method, "bel", "standalone BEL should report its method")
-assert_eq(notification_events[4].message, nil, "standalone BEL should omit its message")
-assert_eq(notification_events[5].method, "bel", "consecutive BEL should emit another BEL event")
+stdout({ "before\7after" })
+assert_eq(#notification_calls, 4, "a standalone BEL byte should invoke once")
+assert_eq(notification_calls[4].method, "bel", "standalone BEL should report its method")
+assert_eq(notification_calls[4].message, nil, "standalone BEL should omit its message")
 
-for _, event in ipairs(notification_events) do
-  assert_eq(event.buf, notification_terminal.buf, "notification events should identify their terminal buffer")
-  assert_eq(event.cwd, resolved_a, "notification events should identify their session cwd")
-  assert_eq(event.count, 6, "notification events should identify their Snacks session count")
+stdout({ "\7\7" })
+assert_eq(#notification_calls, 6, "consecutive BEL bytes should each invoke")
+assert_eq(notification_calls[5].method, "bel", "the first consecutive BEL should report its method")
+assert_eq(notification_calls[5].message, nil, "the first consecutive BEL should omit its message")
+assert_eq(notification_calls[6].method, "bel", "the second consecutive BEL should report its method")
+assert_eq(notification_calls[6].message, nil, "the second consecutive BEL should omit its message")
+
+for _, data in ipairs(notification_calls) do
+  assert_eq(data.buf, notification_terminal.buf, "notifications should identify their terminal buffer")
+  assert_eq(data.cwd, resolved_a, "notifications should identify their session cwd")
+  assert_eq(data.count, 6, "notifications should identify their Snacks session count")
 end
-assert_eq(#original_stdout_calls, 6, "the original stdout callback should receive every output chunk")
+assert_eq(legacy_notification_events, 0, "notification callbacks should not emit legacy User events")
+assert_eq(#original_stdout_calls, 7, "the original stdout callback should receive every output chunk")
 assert_eq(original_stdout_calls[1].job_id, 42, "the original stdout callback should receive its job id")
 assert_eq(original_stdout_calls[1].event, "stdout", "the original stdout callback should receive its event name")
+
+local callback_ok, callback_err = pcall(stdout, { "\27]9;callback failure\7" })
+assert_eq(callback_ok, false, "notification callback errors should propagate synchronously")
+assert_contains(tostring(callback_err), "simulated notification callback failure", "callback errors should be preserved")
+assert_eq(#original_stdout_calls, 8, "the original stdout callback should still run when notification callbacks fail")
+
+local invalid_ok, invalid_err = pcall(reloaded_codex.setup, { on_notification = "notify" })
+assert_eq(invalid_ok, false, "setup should reject a non-function on_notification")
+assert_contains(tostring(invalid_err), "on_notification must be a function", "invalid on_notification errors should be clear")
+
+local per_call_notifications = {}
+reloaded_codex.deactivate()
+reloaded_codex.setup({ args = { "--per-call-notification-test" }, cwd = dir_b, count = 7 })
+local per_call_terminal = reloaded_codex.toggle({
+  on_notification = function(data)
+    per_call_notifications[#per_call_notifications + 1] = vim.deepcopy(data)
+  end,
+})
+launched.opts.on_stdout(42, { "\27]9;per-call message\7" }, "stdout")
+assert_eq(#per_call_notifications, 1, "per-call on_notification should be merged into launch options")
+assert_eq(per_call_notifications[1].message, "per-call message", "per-call callbacks should receive OSC payloads")
+assert_eq(per_call_notifications[1].buf, per_call_terminal.buf, "per-call callbacks should receive the source buffer")
+assert_eq(per_call_notifications[1].cwd, resolved_b, "per-call callbacks should receive the resolved cwd")
+assert_eq(per_call_notifications[1].count, 7, "per-call callbacks should receive the session count")
+assert_eq(legacy_notification_events, 0, "per-call callbacks should not emit legacy User events")
 
 local failing_jobstart = function()
   return 51
@@ -902,7 +960,7 @@ package.loaded.snacks = {
 }
 
 reloaded_codex.deactivate()
-reloaded_codex.setup({ cwd = dir_b })
+reloaded_codex.setup({ cwd = dir_b, on_notification = function() end })
 local launch_ok, launch_err = pcall(reloaded_codex.toggle)
 assert_eq(launch_ok, false, "terminal creation failures should propagate")
 assert_contains(tostring(launch_err), "simulated termopen failure", "terminal creation should preserve the launch error")
@@ -915,7 +973,9 @@ package.loaded.snacks = fake_snacks
 vim.api.nvim_del_augroup_by_id(notification_group)
 reloaded_codex.deactivate()
 vim.api.nvim_set_current_buf(normal_buf)
-vim.api.nvim_buf_delete(notification_terminal.buf, { force = true })
+vim.api.nvim_buf_delete(unobserved_terminal.buf, { force = true })
+vim.api.nvim_buf_delete(observed_terminal.buf, { force = true })
+vim.api.nvim_buf_delete(per_call_terminal.buf, { force = true })
 
 vim.api.nvim_buf_delete(reference_buf, { force = true })
 vim.api.nvim_buf_delete(outside_buf, { force = true })

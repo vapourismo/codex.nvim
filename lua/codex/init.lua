@@ -188,6 +188,10 @@ local function validate(opts)
     error("codex.nvim: count must be a positive integer", 3)
   end
 
+  if opts.on_notification ~= nil and type(opts.on_notification) ~= "function" then
+    error("codex.nvim: on_notification must be a function", 3)
+  end
+
   if opts.keys ~= nil and opts.keys ~= false then
     if type(opts.keys) ~= "table" then
       error("codex.nvim: keys must be a table or false", 3)
@@ -751,11 +755,7 @@ local function emit_notification(context, method, message)
     data.message = message
   end
 
-  vim.api.nvim_exec_autocmds("User", {
-    pattern = "CodexNotification",
-    modeline = false,
-    data = data,
-  })
+  context.on_notification(data)
 end
 
 local function notification_decoder(context)
@@ -886,7 +886,7 @@ local function same_command(actual, expected)
   return actual == expected
 end
 
-local function observe_terminal_launch(command, cwd, count, launch)
+local function observe_terminal_launch(command, cwd, count, on_notification, launch)
   local original_jobstart = vim.fn.jobstart
   local original_termopen = vim.fn.termopen
 
@@ -910,6 +910,7 @@ local function observe_terminal_launch(command, cwd, count, launch)
         buf = vim.api.nvim_get_current_buf(),
         cwd = cwd,
         count = count,
+        on_notification = on_notification,
       })
       launch_opts.on_stdout = function(job_id, data, event)
         local decode_ok, decode_err = pcall(function()
@@ -955,9 +956,15 @@ end
 
 local function open_session(opts, cwd, count, snacks_terminal)
   local command = build_command(opts)
-  local terminal = observe_terminal_launch(command, cwd, count, function()
+  local launch = function()
     return snacks_terminal.toggle(command, build_terminal_opts(opts, cwd, count))
-  end)
+  end
+  local terminal
+  if type(opts.on_notification) == "function" then
+    terminal = observe_terminal_launch(command, cwd, count, opts.on_notification, launch)
+  else
+    terminal = launch()
+  end
   register_session(cwd, count, terminal)
   attach_termclose(terminal)
   return terminal

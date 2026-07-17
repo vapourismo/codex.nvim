@@ -96,6 +96,11 @@ require("codex").setup({
     return vim.fn.getcwd()
   end,
   count = 1,
+  on_notification = function(data)
+    vim.notify(data.message or "Codex needs attention", vim.log.levels.INFO, {
+      title = ("Codex session %d"):format(data.count),
+    })
+  end,
   keys = {
     close = "<D-w>",
     new = "<D-n>",
@@ -117,6 +122,7 @@ Supported options:
 - `args`: command arguments. Defaults to `{}`.
 - `cwd`: working directory string or function returning a string. Defaults to `vim.fn.getcwd()`.
 - `count`: first Snacks terminal count for each directory. Defaults to `1`.
+- `on_notification`: optional callback for OSC 9 and BEL notifications. Defaults to `nil`.
 - `keys`: terminal-local session keys. Set an entry to `false` to disable it.
 - `win`: options merged into the Snacks window config. `win.wo.winbar` is reserved and managed by `codex.nvim`.
 - `terminal`: options merged into the Snacks terminal config.
@@ -143,12 +149,13 @@ require("codex").reference() -- call from characterwise or linewise Visual mode
 
 ## Notifications
 
-With the standard Snacks terminal backend, `codex.nvim` emits a
-`User CodexNotification` autocommand for every OSC 9 notification or standalone
-BEL byte written by Codex. The notification bytes are only observed, so terminal
-rendering and native bell behavior are unchanged.
+With the standard Snacks terminal backend, `codex.nvim` can call an
+`on_notification` callback for every OSC 9 notification or standalone BEL byte
+written by Codex. The notification bytes are only observed, so terminal rendering
+and native bell behavior are unchanged. When the callback is unset, notifications
+are ignored.
 
-The event's `data` table contains:
+The callback's `data` table contains:
 
 - `method`: `"osc9"` or `"bel"`.
 - `message`: the OSC 9 payload; absent for BEL notifications.
@@ -156,13 +163,11 @@ The event's `data` table contains:
 - `cwd`: the session working directory.
 - `count`: the Snacks session identifier.
 
-For example:
+For example, configure it during setup:
 
 ```lua
-vim.api.nvim_create_autocmd("User", {
-  pattern = "CodexNotification",
-  callback = function(event)
-    local data = event.data
+require("codex").setup({
+  on_notification = function(data)
     vim.notify(data.message or "Codex needs attention", vim.log.levels.INFO, {
       title = ("Codex session %d"):format(data.count),
     })
