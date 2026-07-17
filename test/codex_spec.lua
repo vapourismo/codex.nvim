@@ -770,6 +770,153 @@ vim.notify = original_notify
 vim.api.nvim_get_option_value = original_get_option_value
 vim.api.nvim_chan_send = original_chan_send
 
+local fake_snacks = package.loaded.snacks
+local original_jobstart = vim.fn.jobstart
+local original_termopen = vim.fn.termopen
+local unrelated_launch_opts
+local restored_jobstart = function(_, opts)
+  unrelated_launch_opts = opts
+  return 41
+end
+local launched
+local restored_termopen = function(cmd, opts)
+  launched = { cmd = cmd, opts = opts }
+  return 42
+end
+vim.fn.jobstart = restored_jobstart
+vim.fn.termopen = restored_termopen
+
+local original_stdout_calls = {}
+local unrelated_opts
+local notification_terminal
+package.loaded.snacks = {
+  terminal = {
+    toggle = function(cmd, opts)
+      unrelated_opts = {
+        on_stdout = function() end,
+      }
+      vim.fn.jobstart({ "unrelated" }, unrelated_opts)
+
+      notification_terminal = {
+        buf = vim.api.nvim_create_buf(false, true),
+      }
+      vim.api.nvim_buf_call(notification_terminal.buf, function()
+        vim.fn.termopen(cmd, {
+          cwd = opts.cwd,
+          on_stdout = function(job_id, data, event)
+            original_stdout_calls[#original_stdout_calls + 1] = {
+              job_id = job_id,
+              data = data,
+              event = event,
+            }
+          end,
+        })
+      end)
+      return notification_terminal
+    end,
+    list = function()
+      return notification_terminal and { notification_terminal } or {}
+    end,
+  },
+}
+
+local notification_events = {}
+local notification_group = vim.api.nvim_create_augroup("codex.nvim.test.notifications", { clear = true })
+vim.api.nvim_create_autocmd("User", {
+  group = notification_group,
+  pattern = "CodexNotification",
+  callback = function(event)
+    notification_events[#notification_events + 1] = vim.deepcopy(event.data)
+  end,
+})
+
+reloaded_codex.deactivate()
+reloaded_codex.setup({
+  args = { "--notification-test" },
+  cwd = dir_a,
+  count = 6,
+})
+local observed_terminal = reloaded_codex.toggle()
+
+assert_eq(observed_terminal, notification_terminal, "notification launch should return the Snacks terminal")
+assert_eq(vim.fn.jobstart, restored_jobstart, "jobstart should be restored after terminal creation")
+assert_eq(vim.fn.termopen, restored_termopen, "termopen should be restored after terminal creation")
+assert_eq(unrelated_launch_opts, unrelated_opts, "unrelated commands should retain their original launch options")
+assert_list(launched.cmd, { "codex", "--notification-test" }, "only the matching Codex command should be observed")
+
+local function stdout(data)
+  launched.opts.on_stdout(42, data, "stdout")
+end
+
+stdout({ "plain text\27[31mred\27[0m\27]0;title\7\27Pignored\7\27\\" })
+assert_eq(#notification_events, 0, "plain output and unrelated control sequences should not emit notifications")
+
+stdout({ "\27]9;direct message\7" })
+assert_eq(#notification_events, 1, "direct OSC 9 should emit once without a duplicate BEL event")
+assert_eq(notification_events[1].method, "osc9", "direct OSC 9 should report its method")
+assert_eq(notification_events[1].message, "direct message", "direct OSC 9 should decode its message")
+
+stdout({ "\27]9;split " })
+assert_eq(#notification_events, 1, "an incomplete OSC 9 should wait for its terminator")
+stdout({ "message\7" })
+assert_eq(#notification_events, 2, "a chunk-split OSC 9 should emit once")
+assert_eq(notification_events[2].message, "split message", "chunk-split OSC 9 should preserve its message")
+
+stdout({ "\27Ptmux;\27\27]9;tmux message\7\27\\" })
+assert_eq(#notification_events, 3, "tmux-wrapped OSC 9 should emit once")
+assert_eq(notification_events[3].method, "osc9", "tmux-wrapped OSC 9 should report its method")
+assert_eq(notification_events[3].message, "tmux message", "tmux-wrapped OSC 9 should decode its message")
+
+stdout({ "before\7\7after" })
+assert_eq(#notification_events, 5, "consecutive standalone BEL bytes should each emit")
+assert_eq(notification_events[4].method, "bel", "standalone BEL should report its method")
+assert_eq(notification_events[4].message, nil, "standalone BEL should omit its message")
+assert_eq(notification_events[5].method, "bel", "consecutive BEL should emit another BEL event")
+
+for _, event in ipairs(notification_events) do
+  assert_eq(event.buf, notification_terminal.buf, "notification events should identify their terminal buffer")
+  assert_eq(event.cwd, resolved_a, "notification events should identify their session cwd")
+  assert_eq(event.count, 6, "notification events should identify their Snacks session count")
+end
+assert_eq(#original_stdout_calls, 6, "the original stdout callback should receive every output chunk")
+assert_eq(original_stdout_calls[1].job_id, 42, "the original stdout callback should receive its job id")
+assert_eq(original_stdout_calls[1].event, "stdout", "the original stdout callback should receive its event name")
+
+local failing_jobstart = function()
+  return 51
+end
+local failing_termopen = function()
+  error("simulated termopen failure")
+end
+vim.fn.jobstart = failing_jobstart
+vim.fn.termopen = failing_termopen
+package.loaded.snacks = {
+  terminal = {
+    toggle = function(cmd, opts)
+      return vim.fn.termopen(cmd, { cwd = opts.cwd })
+    end,
+    list = function()
+      return {}
+    end,
+  },
+}
+
+reloaded_codex.deactivate()
+reloaded_codex.setup({ cwd = dir_b })
+local launch_ok, launch_err = pcall(reloaded_codex.toggle)
+assert_eq(launch_ok, false, "terminal creation failures should propagate")
+assert_contains(tostring(launch_err), "simulated termopen failure", "terminal creation should preserve the launch error")
+assert_eq(vim.fn.jobstart, failing_jobstart, "jobstart should be restored after terminal creation fails")
+assert_eq(vim.fn.termopen, failing_termopen, "termopen should be restored after terminal creation fails")
+
+vim.fn.jobstart = original_jobstart
+vim.fn.termopen = original_termopen
+package.loaded.snacks = fake_snacks
+vim.api.nvim_del_augroup_by_id(notification_group)
+reloaded_codex.deactivate()
+vim.api.nvim_set_current_buf(normal_buf)
+vim.api.nvim_buf_delete(notification_terminal.buf, { force = true })
+
 vim.api.nvim_buf_delete(reference_buf, { force = true })
 vim.api.nvim_buf_delete(outside_buf, { force = true })
 vim.api.nvim_buf_delete(unnamed_buf, { force = true })

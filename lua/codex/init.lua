@@ -737,8 +737,227 @@ local function register_session(cwd, count, terminal)
   return terminal
 end
 
+local ESC = "\27"
+local BEL = "\7"
+
+local function emit_notification(context, method, message)
+  local data = {
+    method = method,
+    buf = context.buf,
+    cwd = context.cwd,
+    count = context.count,
+  }
+  if message ~= nil then
+    data.message = message
+  end
+
+  vim.api.nvim_exec_autocmds("User", {
+    pattern = "CodexNotification",
+    modeline = false,
+    data = data,
+  })
+end
+
+local function notification_decoder(context)
+  local state = "text"
+  local payload = {}
+
+  local function start_osc(next_state)
+    payload = {}
+    state = next_state
+  end
+
+  local function finish_osc(next_state)
+    local content = table.concat(payload)
+    if content:sub(1, 2) == "9;" then
+      emit_notification(context, "osc9", content:sub(3))
+    end
+    payload = {}
+    state = next_state
+  end
+
+  return function(data)
+    for index = 1, #data do
+      local byte = data:sub(index, index)
+
+      if state == "text" then
+        if byte == ESC then
+          state = "escape"
+        elseif byte == BEL then
+          emit_notification(context, "bel")
+        end
+      elseif state == "escape" then
+        if byte == "]" then
+          start_osc("osc")
+        elseif byte == "P" then
+          state = "dcs"
+        elseif byte == "X" or byte == "^" or byte == "_" then
+          state = "control_string"
+        elseif byte == "[" then
+          state = "csi"
+        elseif byte == BEL then
+          emit_notification(context, "bel")
+        else
+          state = "text"
+        end
+      elseif state == "osc" then
+        if byte == BEL then
+          finish_osc("text")
+        elseif byte == ESC then
+          state = "osc_escape"
+        else
+          payload[#payload + 1] = byte
+        end
+      elseif state == "osc_escape" then
+        if byte == "\\" then
+          finish_osc("text")
+        elseif byte == BEL then
+          finish_osc("text")
+        else
+          payload[#payload + 1] = ESC
+          payload[#payload + 1] = byte
+          state = "osc"
+        end
+      elseif state == "dcs" then
+        if byte == ESC then
+          state = "dcs_escape"
+        end
+      elseif state == "dcs_escape" then
+        if byte == "\\" then
+          state = "text"
+        elseif byte == ESC then
+          state = "dcs_escaped_escape"
+        elseif byte == "]" then
+          start_osc("dcs_osc")
+        else
+          state = "dcs"
+        end
+      elseif state == "dcs_escaped_escape" then
+        if byte == "]" then
+          start_osc("dcs_osc")
+        elseif byte == ESC then
+          state = "dcs_escaped_escape"
+        else
+          state = "dcs"
+        end
+      elseif state == "dcs_osc" then
+        if byte == BEL then
+          finish_osc("dcs")
+        elseif byte == ESC then
+          state = "dcs_osc_escape"
+        else
+          payload[#payload + 1] = byte
+        end
+      elseif state == "dcs_osc_escape" then
+        if byte == "\\" then
+          finish_osc("dcs")
+        elseif byte == BEL then
+          finish_osc("dcs")
+        else
+          payload[#payload + 1] = ESC
+          payload[#payload + 1] = byte
+          state = "dcs_osc"
+        end
+      elseif state == "control_string" then
+        if byte == ESC then
+          state = "control_string_escape"
+        end
+      elseif state == "control_string_escape" then
+        state = byte == "\\" and "text" or "control_string"
+      elseif state == "csi" then
+        local value = byte:byte()
+        if byte == BEL then
+          emit_notification(context, "bel")
+        elseif value >= 0x40 and value <= 0x7e then
+          state = "text"
+        end
+      end
+    end
+  end
+end
+
+local function same_command(actual, expected)
+  if type(actual) ~= type(expected) then
+    return false
+  end
+  if type(actual) == "table" then
+    return vim.deep_equal(actual, expected)
+  end
+  return actual == expected
+end
+
+local function observe_terminal_launch(command, cwd, count, launch)
+  local original_jobstart = vim.fn.jobstart
+  local original_termopen = vim.fn.termopen
+
+  local function decorate(original)
+    if type(original) ~= "function" then
+      return original
+    end
+
+    return function(cmd, opts)
+      if not same_command(cmd, command) then
+        return original(cmd, opts)
+      end
+
+      local launch_opts = {}
+      for key, value in pairs(opts or {}) do
+        launch_opts[key] = value
+      end
+
+      local on_stdout = launch_opts.on_stdout
+      local decode = notification_decoder({
+        buf = vim.api.nvim_get_current_buf(),
+        cwd = cwd,
+        count = count,
+      })
+      launch_opts.on_stdout = function(job_id, data, event)
+        local decode_ok, decode_err = pcall(function()
+          if type(data) == "table" then
+            decode(table.concat(data, "\n"))
+          elseif type(data) == "string" then
+            decode(data)
+          end
+        end)
+
+        local result
+        if type(on_stdout) == "function" then
+          result = on_stdout(job_id, data, event)
+        end
+        if not decode_ok then
+          error(decode_err, 0)
+        end
+        return result
+      end
+
+      return original(cmd, launch_opts)
+    end
+  end
+
+  vim.fn.jobstart = decorate(original_jobstart)
+  if original_termopen ~= nil then
+    vim.fn.termopen = decorate(original_termopen)
+  end
+
+  local result
+  local ok, err = xpcall(function()
+    result = launch()
+  end, debug.traceback)
+
+  vim.fn.jobstart = original_jobstart
+  vim.fn.termopen = original_termopen
+
+  if not ok then
+    error(err, 0)
+  end
+  return result
+end
+
 local function open_session(opts, cwd, count, snacks_terminal)
-  local terminal = snacks_terminal.toggle(build_command(opts), build_terminal_opts(opts, cwd, count))
+  local command = build_command(opts)
+  local terminal = observe_terminal_launch(command, cwd, count, function()
+    return snacks_terminal.toggle(command, build_terminal_opts(opts, cwd, count))
+  end)
   register_session(cwd, count, terminal)
   attach_termclose(terminal)
   return terminal

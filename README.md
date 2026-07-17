@@ -141,5 +141,37 @@ require("codex").next()
 require("codex").reference() -- call from characterwise or linewise Visual mode
 ```
 
+## Notifications
+
+With the standard Snacks terminal backend, `codex.nvim` emits a
+`User CodexNotification` autocommand for every OSC 9 notification or standalone
+BEL byte written by Codex. The notification bytes are only observed, so terminal
+rendering and native bell behavior are unchanged.
+
+The event's `data` table contains:
+
+- `method`: `"osc9"` or `"bel"`.
+- `message`: the OSC 9 payload; absent for BEL notifications.
+- `buf`: the source terminal buffer.
+- `cwd`: the session working directory.
+- `count`: the Snacks session identifier.
+
+For example:
+
+```lua
+vim.api.nvim_create_autocmd("User", {
+  pattern = "CodexNotification",
+  callback = function(event)
+    local data = event.data
+    vim.notify(data.message or "Codex needs attention", vim.log.levels.INFO, {
+      title = ("Codex session %d"):format(data.count),
+    })
+  end,
+})
+```
+
+A custom `terminal.override` owns its process and must provide its own
+notification integration.
+
 `codex.nvim` requires `folke/snacks.nvim` and the `codex` executable to be
 available on `$PATH`.
