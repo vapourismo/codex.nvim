@@ -26,6 +26,7 @@ local defaults = {
 
 local config = vim.deepcopy(defaults)
 local termclose_group = vim.api.nvim_create_augroup("codex.nvim.termclose", { clear = false })
+local termrequest_group = vim.api.nvim_create_augroup("codex.nvim.termrequest", { clear = false })
 local dirchanged_group = vim.api.nvim_create_augroup("codex.nvim.dirchanged", { clear = true })
 local terminals = setmetatable({}, { __mode = "v" })
 local sessions = {}
@@ -325,9 +326,21 @@ end
 
 local function build_command(opts)
   local cmd = { opts.command }
+  local notification_config = { "--config", 'tui.notification_method="osc9"' }
+  local inserted_notification_config = false
+
   for _, arg in ipairs(opts.args or {}) do
+    if arg == "--" and not inserted_notification_config then
+      vim.list_extend(cmd, notification_config)
+      inserted_notification_config = true
+    end
     table.insert(cmd, arg)
   end
+
+  if not inserted_notification_config then
+    vim.list_extend(cmd, notification_config)
+  end
+
   return cmd
 end
 
@@ -741,231 +754,72 @@ local function register_session(cwd, count, terminal)
   return terminal
 end
 
-local ESC = "\27"
-local BEL = "\7"
+local OSC9_PREFIX = "\27]9;"
 
-local function emit_notification(context, method, message)
-  local data = {
-    method = method,
-    buf = context.buf,
-    cwd = context.cwd,
-    count = context.count,
-  }
-  if message ~= nil then
-    data.message = message
+local function termrequest_sequence(data)
+  if type(data) == "string" then
+    return data
   end
-
-  context.on_notification(data)
+  if type(data) == "table" and type(data.sequence) == "string" then
+    return data.sequence
+  end
+  return nil
 end
 
-local function notification_decoder(context)
-  local state = "text"
-  local payload = {}
-
-  local function start_osc(next_state)
-    payload = {}
-    state = next_state
+local function osc9_message(sequence)
+  if type(sequence) ~= "string" or sequence:sub(1, #OSC9_PREFIX) ~= OSC9_PREFIX then
+    return nil
   end
 
-  local function finish_osc(next_state)
-    local content = table.concat(payload)
-    if content:sub(1, 2) == "9;" then
-      emit_notification(context, "osc9", content:sub(3))
-    end
-    payload = {}
-    state = next_state
+  local message = sequence:sub(#OSC9_PREFIX + 1)
+  if message:sub(-1) == "\7" then
+    message = message:sub(1, -2)
+  elseif message:sub(-2) == "\27\\" then
+    message = message:sub(1, -3)
   end
-
-  return function(data)
-    for index = 1, #data do
-      local byte = data:sub(index, index)
-
-      if state == "text" then
-        if byte == ESC then
-          state = "escape"
-        elseif byte == BEL then
-          emit_notification(context, "bel")
-        end
-      elseif state == "escape" then
-        if byte == "]" then
-          start_osc("osc")
-        elseif byte == "P" then
-          state = "dcs"
-        elseif byte == "X" or byte == "^" or byte == "_" then
-          state = "control_string"
-        elseif byte == "[" then
-          state = "csi"
-        elseif byte == BEL then
-          emit_notification(context, "bel")
-        else
-          state = "text"
-        end
-      elseif state == "osc" then
-        if byte == BEL then
-          finish_osc("text")
-        elseif byte == ESC then
-          state = "osc_escape"
-        else
-          payload[#payload + 1] = byte
-        end
-      elseif state == "osc_escape" then
-        if byte == "\\" then
-          finish_osc("text")
-        elseif byte == BEL then
-          finish_osc("text")
-        else
-          payload[#payload + 1] = ESC
-          payload[#payload + 1] = byte
-          state = "osc"
-        end
-      elseif state == "dcs" then
-        if byte == ESC then
-          state = "dcs_escape"
-        end
-      elseif state == "dcs_escape" then
-        if byte == "\\" then
-          state = "text"
-        elseif byte == ESC then
-          state = "dcs_escaped_escape"
-        elseif byte == "]" then
-          start_osc("dcs_osc")
-        else
-          state = "dcs"
-        end
-      elseif state == "dcs_escaped_escape" then
-        if byte == "]" then
-          start_osc("dcs_osc")
-        elseif byte == ESC then
-          state = "dcs_escaped_escape"
-        else
-          state = "dcs"
-        end
-      elseif state == "dcs_osc" then
-        if byte == BEL then
-          finish_osc("dcs")
-        elseif byte == ESC then
-          state = "dcs_osc_escape"
-        else
-          payload[#payload + 1] = byte
-        end
-      elseif state == "dcs_osc_escape" then
-        if byte == "\\" then
-          finish_osc("dcs")
-        elseif byte == BEL then
-          finish_osc("dcs")
-        else
-          payload[#payload + 1] = ESC
-          payload[#payload + 1] = byte
-          state = "dcs_osc"
-        end
-      elseif state == "control_string" then
-        if byte == ESC then
-          state = "control_string_escape"
-        end
-      elseif state == "control_string_escape" then
-        state = byte == "\\" and "text" or "control_string"
-      elseif state == "csi" then
-        local value = byte:byte()
-        if byte == BEL then
-          emit_notification(context, "bel")
-        elseif value >= 0x40 and value <= 0x7e then
-          state = "text"
-        end
-      end
-    end
-  end
+  return message
 end
 
-local function same_command(actual, expected)
-  if type(actual) ~= type(expected) then
-    return false
+local function attach_termrequest(terminal, cwd, count, on_notification)
+  local buf = terminal_buf(terminal)
+  if not buf then
+    return
   end
-  if type(actual) == "table" then
-    return vim.deep_equal(actual, expected)
+
+  local ok, attached = pcall(vim.api.nvim_buf_get_var, buf, "codex_nvim_termrequest")
+  if ok and attached then
+    return
   end
-  return actual == expected
-end
 
-local function observe_terminal_launch(command, cwd, count, on_notification, launch)
-  local original_jobstart = vim.fn.jobstart
-  local original_termopen = vim.fn.termopen
-
-  local function decorate(original)
-    if type(original) ~= "function" then
-      return original
-    end
-
-    return function(cmd, opts)
-      if not same_command(cmd, command) then
-        return original(cmd, opts)
+  vim.api.nvim_create_autocmd("TermRequest", {
+    group = termrequest_group,
+    buffer = buf,
+    desc = "Handle Codex OSC 9 notifications",
+    callback = function(event)
+      local message = osc9_message(termrequest_sequence(event.data))
+      if message == nil then
+        return
       end
 
-      local launch_opts = {}
-      for key, value in pairs(opts or {}) do
-        launch_opts[key] = value
-      end
-
-      local on_stdout = launch_opts.on_stdout
-      local decode = notification_decoder({
-        buf = vim.api.nvim_get_current_buf(),
+      on_notification({
+        method = "osc9",
+        message = message,
+        buf = buf,
         cwd = cwd,
         count = count,
-        on_notification = on_notification,
       })
-      launch_opts.on_stdout = function(job_id, data, event)
-        local decode_ok, decode_err = pcall(function()
-          if type(data) == "table" then
-            decode(table.concat(data, "\n"))
-          elseif type(data) == "string" then
-            decode(data)
-          end
-        end)
-
-        local result
-        if type(on_stdout) == "function" then
-          result = on_stdout(job_id, data, event)
-        end
-        if not decode_ok then
-          error(decode_err, 0)
-        end
-        return result
-      end
-
-      return original(cmd, launch_opts)
-    end
-  end
-
-  vim.fn.jobstart = decorate(original_jobstart)
-  if original_termopen ~= nil then
-    vim.fn.termopen = decorate(original_termopen)
-  end
-
-  local result
-  local ok, err = xpcall(function()
-    result = launch()
-  end, debug.traceback)
-
-  vim.fn.jobstart = original_jobstart
-  vim.fn.termopen = original_termopen
-
-  if not ok then
-    error(err, 0)
-  end
-  return result
+    end,
+  })
+  pcall(vim.api.nvim_buf_set_var, buf, "codex_nvim_termrequest", true)
 end
 
 local function open_session(opts, cwd, count, snacks_terminal)
   local command = build_command(opts)
-  local launch = function()
-    return snacks_terminal.toggle(command, build_terminal_opts(opts, cwd, count))
-  end
-  local terminal
-  if type(opts.on_notification) == "function" then
-    terminal = observe_terminal_launch(command, cwd, count, opts.on_notification, launch)
-  else
-    terminal = launch()
-  end
+  local terminal = snacks_terminal.toggle(command, build_terminal_opts(opts, cwd, count))
   register_session(cwd, count, terminal)
+  if type(opts.on_notification) == "function" then
+    attach_termrequest(terminal, cwd, count, opts.on_notification)
+  end
   attach_termclose(terminal)
   return terminal
 end

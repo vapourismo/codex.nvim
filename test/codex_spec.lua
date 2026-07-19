@@ -24,6 +24,8 @@ local function assert_contains(actual, expected, message)
   end
 end
 
+local OSC9_CONFIG = 'tui.notification_method="osc9"'
+
 local function codex_winbar(selected, total)
   if total < 2 then
     return ""
@@ -177,7 +179,11 @@ codex.setup()
 codex.toggle()
 
 assert_eq(#calls, 1, "toggle should call Snacks once")
-assert_list(calls[1].cmd, { "codex" }, "default command should be codex")
+assert_list(
+  calls[1].cmd,
+  { "codex", "--config", OSC9_CONFIG },
+  "default command should force OSC 9 notifications"
+)
 assert_eq(calls[1].opts.cwd, original_cwd, "default cwd should resolve to current working directory")
 assert_eq(calls[1].opts.count, 1, "default count should be stable")
 assert_eq(calls[1].opts.auto_close, false, "custom TermClose handling should disable Snacks auto_close")
@@ -198,7 +204,7 @@ assert_eq(type(calls[1].opts.win.keys.codex_close[2]), "function", "Codex close 
 
 codex.setup({
   command = "codex",
-  args = { "--model", "gpt-5" },
+  args = { "--config", 'tui.notification_method="bel"', "--model", "gpt-5" },
   cwd = function()
     return "/tmp"
   end,
@@ -222,14 +228,18 @@ codex.setup({
 })
 
 codex.toggle({
-  args = { "exec", "hello" },
+  args = { "exec", "hello", "--", "prompt" },
   cwd = "/tmp/project",
   win = { position = "left" },
   terminal = { auto_insert = false },
 })
 
 assert_eq(#calls, 2, "second toggle should call Snacks again")
-assert_list(calls[2].cmd, { "codex", "exec", "hello" }, "per-call args should replace configured args")
+assert_list(
+  calls[2].cmd,
+  { "codex", "exec", "hello", "--config", OSC9_CONFIG, "--", "prompt" },
+  "the notification override should follow per-call args and precede the delimiter"
+)
 assert_eq(calls[2].opts.cwd, normalize_cwd("/tmp/project"), "per-call cwd should win")
 assert_eq(calls[2].opts.count, 4, "configured count should be passed to Snacks")
 assert_eq(calls[2].opts.win.position, "left", "per-call win config should merge")
@@ -254,6 +264,19 @@ codex.toggle({
 })
 
 assert_eq(#calls, 3, "third toggle should call Snacks again")
+assert_list(
+  calls[3].cmd,
+  {
+    "codex",
+    "--config",
+    'tui.notification_method="bel"',
+    "--model",
+    "gpt-5",
+    "--config",
+    OSC9_CONFIG,
+  },
+  "the plugin notification override should follow and take precedence over configured arguments"
+)
 assert_eq(calls[3].opts.win.wo.winbar, "", "Codex should clear a per-call winbar for one session")
 
 vim.g.loaded_codex_nvim = 1
@@ -275,7 +298,11 @@ assert_eq(vim.api.nvim_buf_is_valid(terminals[1].buf), true, "deactivate should 
 codex.toggle()
 
 assert_eq(#calls, 4, "toggle should still work after deactivate")
-assert_list(calls[4].cmd, { "codex" }, "deactivate should reset configured args")
+assert_list(
+  calls[4].cmd,
+  { "codex", "--config", OSC9_CONFIG },
+  "deactivate should reset configured args and retain the notification override"
+)
 assert_eq(calls[4].opts.cwd, original_cwd, "deactivate should reset cwd")
 assert_eq(calls[4].opts.count, 1, "deactivate should reset count")
 assert_eq(calls[4].opts.win.position, "right", "deactivate should reset win position")
@@ -774,22 +801,23 @@ local fake_snacks = package.loaded.snacks
 local original_jobstart = vim.fn.jobstart
 local original_termopen = vim.fn.termopen
 local unrelated_launch_opts
-local restored_jobstart = function(_, opts)
+local unchanged_jobstart = function(_, opts)
   unrelated_launch_opts = opts
   return 41
 end
 local launched
-local restored_termopen = function(cmd, opts)
+local unchanged_termopen = function(cmd, opts)
   launched = { cmd = cmd, opts = opts }
   return 42
 end
-vim.fn.jobstart = restored_jobstart
-vim.fn.termopen = restored_termopen
+vim.fn.jobstart = unchanged_jobstart
+vim.fn.termopen = unchanged_termopen
 
 local original_stdout_calls = {}
 local terminal_stdout
 local unrelated_opts
 local notification_terminal
+local reuse_notification_terminal = false
 package.loaded.snacks = {
   terminal = {
     toggle = function(cmd, opts)
@@ -797,6 +825,10 @@ package.loaded.snacks = {
         on_stdout = function() end,
       }
       vim.fn.jobstart({ "unrelated" }, unrelated_opts)
+
+      if reuse_notification_terminal and vim.api.nvim_buf_is_valid(notification_terminal.buf) then
+        return notification_terminal
+      end
 
       notification_terminal = {
         buf = vim.api.nvim_create_buf(false, true),
@@ -822,6 +854,28 @@ package.loaded.snacks = {
   },
 }
 
+local function notification_autocmds(buf)
+  return vim.api.nvim_get_autocmds({
+    event = "TermRequest",
+    group = "codex.nvim.termrequest",
+    buffer = buf,
+  })
+end
+
+local function termrequest(buf, data)
+  local autocmds = notification_autocmds(buf)
+  assert_eq(#autocmds, 1, "notification-enabled terminals should have one TermRequest handler")
+  return autocmds[1].callback({ buf = buf, data = data })
+end
+
+local function exec_termrequest(buf, sequence)
+  assert_eq(#notification_autocmds(buf), 1, "notification-enabled terminals should have one TermRequest handler")
+  return vim.api.nvim_exec_autocmds("TermRequest", {
+    buffer = buf,
+    data = { sequence = sequence, cursor = { 1, 0 } },
+  })
+end
+
 local legacy_notification_events = 0
 local notification_group = vim.api.nvim_create_augroup("codex.nvim.test.notifications", { clear = true })
 vim.api.nvim_create_autocmd("User", {
@@ -844,7 +898,8 @@ assert_eq(
   terminal_stdout,
   "launches without on_notification should retain their original stdout callback"
 )
-launched.opts.on_stdout(42, { "\27]9;ignored message\7" }, "stdout")
+assert_eq(#notification_autocmds(unobserved_terminal.buf), 0, "unobserved terminals should not attach TermRequest handlers")
+launched.opts.on_stdout(42, { "before\7after\27]9;ignored message\7" }, "stdout")
 assert_eq(#original_stdout_calls, 1, "unobserved output should still reach the original stdout callback")
 assert_eq(legacy_notification_events, 0, "unobserved notifications should not emit legacy User events")
 
@@ -865,45 +920,42 @@ reloaded_codex.setup({
 local observed_terminal = reloaded_codex.toggle()
 
 assert_eq(observed_terminal, notification_terminal, "notification launch should return the Snacks terminal")
-assert_eq(vim.fn.jobstart, restored_jobstart, "jobstart should be restored after terminal creation")
-assert_eq(vim.fn.termopen, restored_termopen, "termopen should be restored after terminal creation")
+assert_eq(vim.fn.jobstart, unchanged_jobstart, "notification setup should leave jobstart unchanged")
+assert_eq(vim.fn.termopen, unchanged_termopen, "notification setup should leave termopen unchanged")
 assert_eq(unrelated_launch_opts, unrelated_opts, "unrelated commands should retain their original launch options")
-assert_list(launched.cmd, { "codex", "--notification-test" }, "only the matching Codex command should be observed")
+assert_list(
+  launched.cmd,
+  { "codex", "--notification-test", "--config", OSC9_CONFIG },
+  "notification launches should include the OSC 9 override"
+)
+assert_eq(#notification_autocmds(observed_terminal.buf), 1, "notification terminals should attach one handler")
 
-local function stdout(data)
-  launched.opts.on_stdout(42, data, "stdout")
-end
+launched.opts.on_stdout(42, { "plain text\7\27]9;stdout message\7" }, "stdout")
+assert_eq(#notification_calls, 0, "BEL and OSC bytes on stdout should not invoke the callback")
+assert_eq(#original_stdout_calls, 1, "the original stdout callback should receive terminal output unchanged")
+assert_eq(original_stdout_calls[1].job_id, 42, "the original stdout callback should receive its job id")
+assert_eq(original_stdout_calls[1].event, "stdout", "the original stdout callback should receive its event name")
 
-stdout({ "plain text\27[31mred\27[0m\27]0;title\7\27Pignored\7\27\\" })
-assert_eq(#notification_calls, 0, "plain output and unrelated control sequences should not invoke the callback")
-
-stdout({ "\27]9;direct message\7" })
-assert_eq(#notification_calls, 1, "direct OSC 9 should invoke once without a duplicate BEL notification")
+exec_termrequest(observed_terminal.buf, "\27]9;direct message")
+assert_eq(#notification_calls, 1, "table-shaped direct OSC 9 requests should invoke once")
 assert_eq(notification_calls[1].method, "osc9", "direct OSC 9 should report its method")
 assert_eq(notification_calls[1].message, "direct message", "direct OSC 9 should decode its message")
 
-stdout({ "\27]9;split " })
-assert_eq(#notification_calls, 1, "an incomplete OSC 9 should wait for its terminator")
-stdout({ "message\7" })
-assert_eq(#notification_calls, 2, "a chunk-split OSC 9 should invoke once")
-assert_eq(notification_calls[2].message, "split message", "chunk-split OSC 9 should preserve its message")
+termrequest(observed_terminal.buf, "\27]9;legacy message\7")
+assert_eq(#notification_calls, 2, "string-shaped direct OSC 9 requests should invoke once")
+assert_eq(notification_calls[2].method, "osc9", "legacy OSC 9 should report its method")
+assert_eq(notification_calls[2].message, "legacy message", "legacy OSC 9 should preserve its complete payload")
 
-stdout({ "\27Ptmux;\27\27]9;tmux message\7\27\\" })
-assert_eq(#notification_calls, 3, "tmux-wrapped OSC 9 should invoke once")
-assert_eq(notification_calls[3].method, "osc9", "tmux-wrapped OSC 9 should report its method")
-assert_eq(notification_calls[3].message, "tmux message", "tmux-wrapped OSC 9 should decode its message")
-
-stdout({ "before\7after" })
-assert_eq(#notification_calls, 4, "a standalone BEL byte should invoke once")
-assert_eq(notification_calls[4].method, "bel", "standalone BEL should report its method")
-assert_eq(notification_calls[4].message, nil, "standalone BEL should omit its message")
-
-stdout({ "\7\7" })
-assert_eq(#notification_calls, 6, "consecutive BEL bytes should each invoke")
-assert_eq(notification_calls[5].method, "bel", "the first consecutive BEL should report its method")
-assert_eq(notification_calls[5].message, nil, "the first consecutive BEL should omit its message")
-assert_eq(notification_calls[6].method, "bel", "the second consecutive BEL should report its method")
-assert_eq(notification_calls[6].message, nil, "the second consecutive BEL should omit its message")
+for _, request in ipairs({
+  "\7",
+  "\27]0;title",
+  "\27Ptmux;\27\27]9;tmux message\7\27\\",
+  "\27_ignore this\27\\",
+}) do
+  termrequest(observed_terminal.buf, { sequence = request })
+end
+termrequest(observed_terminal.buf, {})
+assert_eq(#notification_calls, 2, "BEL and unrelated OSC, DCS, and APC requests should be ignored")
 
 for _, data in ipairs(notification_calls) do
   assert_eq(data.buf, notification_terminal.buf, "notifications should identify their terminal buffer")
@@ -911,14 +963,16 @@ for _, data in ipairs(notification_calls) do
   assert_eq(data.count, 6, "notifications should identify their Snacks session count")
 end
 assert_eq(legacy_notification_events, 0, "notification callbacks should not emit legacy User events")
-assert_eq(#original_stdout_calls, 7, "the original stdout callback should receive every output chunk")
-assert_eq(original_stdout_calls[1].job_id, 42, "the original stdout callback should receive its job id")
-assert_eq(original_stdout_calls[1].event, "stdout", "the original stdout callback should receive its event name")
 
-local callback_ok, callback_err = pcall(stdout, { "\27]9;callback failure\7" })
+reuse_notification_terminal = true
+local duplicate_terminal = reloaded_codex.toggle()
+reuse_notification_terminal = false
+assert_eq(duplicate_terminal, observed_terminal, "duplicate launches should reuse the simulated terminal")
+assert_eq(#notification_autocmds(observed_terminal.buf), 1, "duplicate attachment should retain one TermRequest handler")
+
+local callback_ok, callback_err = pcall(termrequest, observed_terminal.buf, { sequence = "\27]9;callback failure" })
 assert_eq(callback_ok, false, "notification callback errors should propagate synchronously")
 assert_contains(tostring(callback_err), "simulated notification callback failure", "callback errors should be preserved")
-assert_eq(#original_stdout_calls, 8, "the original stdout callback should still run when notification callbacks fail")
 
 local invalid_ok, invalid_err = pcall(reloaded_codex.setup, { on_notification = "notify" })
 assert_eq(invalid_ok, false, "setup should reject a non-function on_notification")
@@ -932,7 +986,7 @@ local per_call_terminal = reloaded_codex.toggle({
     per_call_notifications[#per_call_notifications + 1] = vim.deepcopy(data)
   end,
 })
-launched.opts.on_stdout(42, { "\27]9;per-call message\7" }, "stdout")
+termrequest(per_call_terminal.buf, { sequence = "\27]9;per-call message" })
 assert_eq(#per_call_notifications, 1, "per-call on_notification should be merged into launch options")
 assert_eq(per_call_notifications[1].message, "per-call message", "per-call callbacks should receive OSC payloads")
 assert_eq(per_call_notifications[1].buf, per_call_terminal.buf, "per-call callbacks should receive the source buffer")
@@ -943,7 +997,9 @@ assert_eq(legacy_notification_events, 0, "per-call callbacks should not emit leg
 local failing_jobstart = function()
   return 51
 end
+local failed_command
 local failing_termopen = function()
+  failed_command = true
   error("simulated termopen failure")
 end
 vim.fn.jobstart = failing_jobstart
@@ -964,8 +1020,9 @@ reloaded_codex.setup({ cwd = dir_b, on_notification = function() end })
 local launch_ok, launch_err = pcall(reloaded_codex.toggle)
 assert_eq(launch_ok, false, "terminal creation failures should propagate")
 assert_contains(tostring(launch_err), "simulated termopen failure", "terminal creation should preserve the launch error")
-assert_eq(vim.fn.jobstart, failing_jobstart, "jobstart should be restored after terminal creation fails")
-assert_eq(vim.fn.termopen, failing_termopen, "termopen should be restored after terminal creation fails")
+assert_eq(failed_command, true, "terminal launch failures should reach the terminal backend")
+assert_eq(vim.fn.jobstart, failing_jobstart, "failed notification launches should leave jobstart unchanged")
+assert_eq(vim.fn.termopen, failing_termopen, "failed notification launches should leave termopen unchanged")
 
 vim.fn.jobstart = original_jobstart
 vim.fn.termopen = original_termopen

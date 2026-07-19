@@ -122,7 +122,7 @@ Supported options:
 - `args`: command arguments. Defaults to `{}`.
 - `cwd`: working directory string or function returning a string. Defaults to `vim.fn.getcwd()`.
 - `count`: first Snacks terminal count for each directory. Defaults to `1`.
-- `on_notification`: optional callback for OSC 9 and BEL notifications. Defaults to `nil`.
+- `on_notification`: optional callback for OSC 9 notifications. Defaults to `nil`.
 - `keys`: terminal-local session keys. Set an entry to `false` to disable it.
 - `win`: options merged into the Snacks window config. `win.wo.winbar` is reserved and managed by `codex.nvim`.
 - `terminal`: options merged into the Snacks terminal config.
@@ -149,16 +149,21 @@ require("codex").reference() -- call from characterwise or linewise Visual mode
 
 ## Notifications
 
-With the standard Snacks terminal backend, `codex.nvim` can call an
-`on_notification` callback for every OSC 9 notification or standalone BEL byte
-written by Codex. The notification bytes are only observed, so terminal rendering
-and native bell behavior are unchanged. When the callback is unset, notifications
-are ignored.
+On Neovim 0.10 or newer, `codex.nvim` uses the buffer-local `TermRequest`
+event to call `on_notification` for direct OSC 9 notifications from Codex.
+Every generated command automatically includes
+`--config 'tui.notification_method="osc9"'` after user arguments and before any
+`--` delimiter. This launch-time override takes precedence over earlier Codex
+configuration, so no persistent `config.toml` setting is needed.
+
+Standalone BEL bytes, unrelated terminal requests, and tmux-wrapped DCS
+sequences are ignored. Terminal stdout callbacks are left unchanged. When
+`on_notification` is unset, no notification handler is attached.
 
 The callback's `data` table contains:
 
-- `method`: `"osc9"` or `"bel"`.
-- `message`: the OSC 9 payload; absent for BEL notifications.
+- `method`: always `"osc9"`.
+- `message`: the OSC 9 payload.
 - `buf`: the source terminal buffer.
 - `cwd`: the session working directory.
 - `count`: the Snacks session identifier.
@@ -175,8 +180,8 @@ require("codex").setup({
 })
 ```
 
-A custom `terminal.override` owns its process and must provide its own
-notification integration.
+A custom `terminal.override` must return a Neovim terminal buffer for
+`TermRequest` notification handling to work.
 
-`codex.nvim` requires `folke/snacks.nvim` and the `codex` executable to be
-available on `$PATH`.
+`codex.nvim` requires Neovim 0.10+, `folke/snacks.nvim`, and the `codex`
+executable to be available on `$PATH`.
