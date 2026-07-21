@@ -3,6 +3,9 @@
 Minimal Neovim integration for running the Codex CLI in a right-side
 [Snacks terminal](https://github.com/folke/snacks.nvim/blob/main/docs/terminal.md).
 
+> [!NOTE]
+> This plugin is vibe-coded.
+
 ## Installation
 
 With [lazy.nvim](https://github.com/folke/lazy.nvim):
