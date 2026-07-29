@@ -551,16 +551,120 @@ reset_fake_snacks()
 reloaded_codex.deactivate()
 reloaded_codex.setup({ cwd = dir_a })
 
-local close_first = reloaded_codex.toggle()
-local close_second = reloaded_codex.new()
-vim.api.nvim_exec_autocmds("TermClose", { buffer = close_second.buf, modeline = false, data = { status = 0 } })
-assert_truthy(vim.wait(1000, function()
-  return close_second.closed == true and not vim.api.nvim_buf_is_valid(close_second.buf)
-end), "TermClose cleanup should run")
-reloaded_codex.new()
+local termclose_first = reloaded_codex.toggle()
+local termclose_second = reloaded_codex.new()
+local termclose_third = reloaded_codex.new()
+reloaded_codex.previous()
+local termclose_other_dir = reloaded_codex.toggle({ cwd = dir_b })
 
-assert_eq(close_first.closed, nil, "TermClose should not close sibling sessions")
-assert_eq(calls[3].opts.count, 2, "TermClose should remove the closed count from tracking")
+vim.api.nvim_exec_autocmds("TermClose", {
+  buffer = termclose_second.buf,
+  modeline = false,
+  data = { status = 0 },
+})
+assert_truthy(vim.wait(1000, function()
+  return termclose_second.closed == true and not vim.api.nvim_buf_is_valid(termclose_second.buf)
+end), "TermClose cleanup should run")
+
+assert_eq(termclose_third.visible, true, "TermClose should activate the next same-directory session")
+assert_eq(termclose_third.shown, 1, "TermClose should show the next same-directory session")
+assert_eq(termclose_third.focused, 1, "TermClose should focus the next same-directory session")
+assert_eq(termclose_first.closed, nil, "TermClose should not close sibling sessions")
+assert_eq(termclose_third.closed, nil, "TermClose should not close the replacement session")
+assert_eq(termclose_other_dir.closed, nil, "TermClose should not close sessions from other directories")
+assert_eq(termclose_other_dir.shown, nil, "TermClose should not activate sessions from other directories")
+assert_eq(termclose_other_dir.focused, nil, "TermClose should not focus sessions from other directories")
+assert_eq(
+  vim.api.nvim_get_option_value("winbar", { win = termclose_third.win }),
+  codex_winbar(2, 2),
+  "TermClose should remove the exited session from the replacement winbar"
+)
+
+vim.api.nvim_set_current_buf(termclose_third.buf)
+reloaded_codex.new()
+assert_eq(calls[5].opts.count, 2, "TermClose should free the exited count for reuse")
+
+reset_fake_snacks()
+reloaded_codex.deactivate()
+reloaded_codex.setup({ cwd = dir_a })
+
+local termclose_wrap_first = reloaded_codex.toggle()
+local termclose_wrap_second = reloaded_codex.new()
+local termclose_wrap_third = reloaded_codex.new()
+vim.api.nvim_exec_autocmds("TermClose", {
+  buffer = termclose_wrap_third.buf,
+  modeline = false,
+  data = { status = 0 },
+})
+assert_truthy(vim.wait(1000, function()
+  return termclose_wrap_third.closed == true and not vim.api.nvim_buf_is_valid(termclose_wrap_third.buf)
+end), "TermClose fallback cleanup should run")
+
+assert_eq(termclose_wrap_second.visible, true, "TermClose should fall back to the previous session")
+assert_eq(termclose_wrap_second.shown, 1, "TermClose should show the previous fallback")
+assert_eq(termclose_wrap_second.focused, 1, "TermClose should focus the previous fallback")
+assert_eq(termclose_wrap_first.closed, nil, "TermClose fallback should preserve earlier sibling sessions")
+assert_eq(
+  vim.api.nvim_get_option_value("winbar", { win = termclose_wrap_second.win }),
+  codex_winbar(2, 2),
+  "TermClose fallback should refresh the replacement winbar"
+)
+
+reset_fake_snacks()
+reloaded_codex.deactivate()
+reloaded_codex.setup({ cwd = dir_a })
+
+local termclose_only = reloaded_codex.toggle()
+vim.api.nvim_exec_autocmds("TermClose", {
+  buffer = termclose_only.buf,
+  modeline = false,
+  data = { status = 0 },
+})
+assert_truthy(vim.wait(1000, function()
+  return termclose_only.closed == true and not vim.api.nvim_buf_is_valid(termclose_only.buf)
+end), "TermClose should close the sidebar when no replacement exists")
+assert_eq(termclose_only.shown, nil, "TermClose should not create a replacement for the only session")
+
+reset_fake_snacks()
+reloaded_codex.deactivate()
+reloaded_codex.setup({ cwd = dir_a })
+
+local idempotent_first = reloaded_codex.toggle()
+local idempotent_second = reloaded_codex.new()
+local close_idempotent_first = idempotent_first.close
+idempotent_first.close = function(self)
+  vim.api.nvim_exec_autocmds("TermClose", {
+    buffer = self.buf,
+    modeline = false,
+    data = { status = 0 },
+  })
+  return close_idempotent_first(self)
+end
+
+vim.api.nvim_set_current_buf(idempotent_first.buf)
+local idempotent_replacement = reloaded_codex.close()
+assert_eq(idempotent_replacement, idempotent_second, "close should still return its replacement when TermClose follows")
+
+vim.api.nvim_set_current_buf(idempotent_second.buf)
+local idempotent_reused = reloaded_codex.new()
+assert_eq(calls[3].opts.count, 1, "close should permit immediate count reuse before scheduled TermClose cleanup")
+
+local scheduled_termclose_flushed = false
+vim.schedule(function()
+  scheduled_termclose_flushed = true
+end)
+assert_truthy(vim.wait(1000, function()
+  return scheduled_termclose_flushed
+end), "scheduled TermClose cleanup should finish")
+
+assert_eq(idempotent_second.shown, 1, "scheduled TermClose should not show the replacement twice")
+assert_eq(idempotent_second.focused, 1, "scheduled TermClose should not focus the replacement twice")
+assert_eq(idempotent_reused.closed, nil, "scheduled TermClose should not close a session reusing the exited count")
+assert_eq(vim.api.nvim_buf_is_valid(idempotent_reused.buf), true, "scheduled TermClose should preserve the reused buffer")
+
+vim.api.nvim_set_current_buf(idempotent_reused.buf)
+reloaded_codex.new()
+assert_eq(calls[4].opts.count, 3, "scheduled TermClose should retain the reused count in session tracking")
 
 reset_fake_snacks()
 reloaded_codex.deactivate()

@@ -549,40 +549,7 @@ local function remove_session(cwd, count)
   end
 end
 
-local function remove_session_by_buf(buf)
-  for cwd, state in pairs(sessions) do
-    for count, terminal in pairs(state.terminals) do
-      if type(terminal) == "table" and terminal.buf == buf then
-        remove_session(cwd, count)
-        return
-      end
-    end
-  end
-end
-
-local function untrack_terminal(buf)
-  local cwd
-  local count
-  local cwd_ok, cwd_var = pcall(vim.api.nvim_buf_get_var, buf, "codex_nvim_cwd")
-  if cwd_ok and type(cwd_var) == "string" then
-    cwd = cwd_var
-  end
-
-  local count_ok, count_var = pcall(vim.api.nvim_buf_get_var, buf, "codex_nvim_count")
-  if count_ok and type(count_var) == "number" then
-    count = count_var
-  end
-
-  terminals[buf] = nil
-
-  if cwd and count then
-    remove_session(cwd, count)
-  else
-    remove_session_by_buf(buf)
-  end
-end
-
-local function prune_state(cwd)
+local function prune_state(cwd, preserved_session)
   local state = sessions[cwd]
   if not state then
     return nil
@@ -591,7 +558,11 @@ local function prune_state(cwd)
   for index = #state.counts, 1, -1 do
     local count = state.counts[index]
     local terminal = state.terminals[count]
-    if not terminal or not terminal_buf(terminal) then
+    local preserved = preserved_session
+      and preserved_session.count == count
+      and type(terminal) == "table"
+      and terminal.buf == preserved_session.buf
+    if not preserved and (not terminal or not terminal_buf(terminal)) then
       remove_session(cwd, count)
     end
   end
@@ -820,7 +791,7 @@ local function open_session(opts, cwd, count, snacks_terminal)
   if type(opts.on_notification) == "function" then
     attach_termrequest(terminal, cwd, count, opts.on_notification)
   end
-  attach_termclose(terminal)
+  attach_termclose(terminal, cwd, count)
   return terminal
 end
 
@@ -849,7 +820,7 @@ local function show_existing_session(cwd, count)
   end
 
   register_session(cwd, count, terminal)
-  attach_termclose(terminal)
+  attach_termclose(terminal, cwd, count)
 
   return terminal
 end
@@ -1015,6 +986,37 @@ local function close_terminal_buffer(buf, terminal)
   pcall(vim.cmd.checktime)
 end
 
+local function close_session(session)
+  local state = prune_state(session.cwd, session)
+  local tracked = state and state.terminals[session.count] or nil
+  local is_tracked = state
+    and index_of_count(state, session.count)
+    and type(tracked) == "table"
+    and tracked.buf == session.buf
+
+  if not is_tracked then
+    terminals[session.buf] = nil
+    if vim.api.nvim_buf_is_valid(session.buf) then
+      close_terminal_buffer(session.buf, session.terminal)
+    end
+    return session.terminal or true
+  end
+
+  session.terminal = tracked
+
+  local replacement
+  local count = replacement_count(state, session.count)
+  if count then
+    replacement = show_existing_session(session.cwd, count)
+  end
+
+  terminals[session.buf] = nil
+  remove_session(session.cwd, session.count)
+  close_terminal_buffer(session.buf, session.terminal)
+
+  return replacement or session.terminal or true
+end
+
 local function show_session(opts, cwd, count, snacks_terminal)
   local state = state_for(cwd)
   local terminal = state.terminals[count]
@@ -1029,7 +1031,7 @@ local function show_session(opts, cwd, count, snacks_terminal)
         pcall(terminal.focus, terminal)
       end
       register_session(cwd, count, terminal)
-      attach_termclose(terminal)
+      attach_termclose(terminal, cwd, count)
       return terminal
     end
   end
@@ -1037,7 +1039,7 @@ local function show_session(opts, cwd, count, snacks_terminal)
   return open_session(opts, cwd, count, snacks_terminal)
 end
 
-attach_termclose = function(terminal)
+attach_termclose = function(terminal, cwd, count)
   if not terminal or type(terminal) ~= "table" or not terminal.buf then
     return
   end
@@ -1061,14 +1063,12 @@ attach_termclose = function(terminal)
     once = true,
     callback = function()
       vim.schedule(function()
-        untrack_terminal(buf)
-        if type(terminal.close) == "function" then
-          pcall(terminal.close, terminal)
-        end
-        if vim.api.nvim_buf_is_valid(buf) then
-          pcall(vim.api.nvim_buf_delete, buf, { force = true })
-        end
-        pcall(vim.cmd.checktime)
+        close_session({
+          buf = buf,
+          cwd = cwd,
+          count = count,
+          terminal = terminal,
+        })
       end)
     end,
   })
@@ -1128,22 +1128,7 @@ function M.close()
     return nil
   end
 
-  local state = prune_state(current.cwd)
-  if state and not terminal_buf(current.terminal) then
-    current.terminal = state.terminals[current.count]
-  end
-
-  local replacement
-  local count = replacement_count(state, current.count)
-  if count then
-    replacement = show_existing_session(current.cwd, count)
-  end
-
-  terminals[current.buf] = nil
-  remove_session(current.cwd, current.count)
-  close_terminal_buffer(current.buf, current.terminal)
-
-  return replacement or current.terminal or true
+  return close_session(current)
 end
 
 local function navigate(opts, delta)
