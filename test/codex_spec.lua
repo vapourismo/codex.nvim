@@ -85,6 +85,18 @@ local function reset_fake_snacks()
   terminal_by_id = {}
 end
 
+local function simulate_snacks_on_win(call, winfixwidth)
+  local win = vim.api.nvim_get_current_win()
+  local snacks_win = {
+    win = win,
+    opts = vim.deepcopy(call.opts.win),
+  }
+  snacks_win.opts.wo.winfixwidth = winfixwidth
+  vim.wo[win].winfixwidth = winfixwidth
+  call.opts.win.on_win(snacks_win)
+  return snacks_win
+end
+
 package.loaded.snacks = {
   terminal = {
     toggle = function(cmd, opts)
@@ -193,6 +205,10 @@ assert_eq(calls[1].opts.win.width, 0.4, "default terminal width should be 40 per
 assert_eq(type(calls[1].opts.win.wo.winbar), "string", "Codex winbar should be a static string")
 assert_eq(calls[1].opts.win.wo.winbar:find("%{", 1, true), nil, "Codex winbar should not be an expression")
 assert_eq(calls[1].opts.win.wo.winbar, "", "default terminal winbar should be hidden for one session")
+assert_eq(calls[1].opts.win.wo.winfixwidth, false, "default terminal width should remain adjustable")
+local default_snacks_win = simulate_snacks_on_win(calls[1], true)
+assert_eq(default_snacks_win.opts.wo.winfixwidth, false, "Codex should correct Snacks' stored split default")
+assert_eq(vim.wo[default_snacks_win.win].winfixwidth, false, "Codex should correct Snacks' applied split default")
 assert_eq(calls[1].opts.win.keys.codex_new[1], "<D-n>", "default new key should be installed")
 assert_eq(calls[1].opts.win.keys.codex_close[1], "<D-w>", "default close key should be installed")
 assert_eq(calls[1].opts.win.keys.codex_previous[1], "<D-{>", "default previous key should be installed")
@@ -202,6 +218,7 @@ assert_list(calls[1].opts.win.keys.codex_close.mode, { "n", "t" }, "Codex close 
 assert_eq(type(calls[1].opts.win.keys.codex_new[2]), "function", "Codex key rhs should be callable")
 assert_eq(type(calls[1].opts.win.keys.codex_close[2]), "function", "Codex close key rhs should be callable")
 
+local configured_on_win
 codex.setup({
   command = "codex",
   args = { "--config", 'tui.notification_method="bel"', "--model", "gpt-5" },
@@ -217,8 +234,14 @@ codex.setup({
   },
   win = {
     width = 0.5,
+    on_win = function(snacks_win)
+      configured_on_win = snacks_win
+    end,
     keys = {
       q = "hide",
+    },
+    wo = {
+      winfixwidth = true,
     },
   },
   terminal = {
@@ -245,6 +268,10 @@ assert_eq(calls[2].opts.count, 4, "configured count should be passed to Snacks")
 assert_eq(calls[2].opts.win.position, "left", "per-call win config should merge")
 assert_eq(calls[2].opts.win.width, 0.5, "configured win config should be preserved")
 assert_eq(calls[2].opts.win.wo.winbar, "", "Codex winbar should stay hidden when win config merges")
+assert_eq(calls[2].opts.win.wo.winfixwidth, true, "configured winfixwidth should override the default")
+local configured_snacks_win = simulate_snacks_on_win(calls[2], true)
+assert_eq(configured_on_win, configured_snacks_win, "configured on_win callback should be preserved")
+assert_eq(vim.wo[configured_snacks_win.win].winfixwidth, true, "configured winfixwidth should remain applied")
 assert_eq(calls[2].opts.win.keys.q, "hide", "user Snacks keys should be preserved")
 assert_eq(calls[2].opts.win.keys.codex_new[1], "<leader>cn", "custom new key should be installed")
 assert_eq(calls[2].opts.win.keys.codex_close[1], "<leader>cw", "custom close key should be installed")
@@ -259,6 +286,7 @@ codex.toggle({
   win = {
     wo = {
       winbar = "Codex",
+      winfixwidth = false,
     },
   },
 })
@@ -278,6 +306,10 @@ assert_list(
   "the plugin notification override should follow and take precedence over configured arguments"
 )
 assert_eq(calls[3].opts.win.wo.winbar, "", "Codex should clear a per-call winbar for one session")
+assert_eq(calls[3].opts.win.wo.winfixwidth, false, "per-call winfixwidth should override setup")
+local per_call_snacks_win = simulate_snacks_on_win(calls[3], true)
+assert_eq(per_call_snacks_win.opts.wo.winfixwidth, false, "per-call winfixwidth should correct Snacks' stored value")
+assert_eq(vim.wo[per_call_snacks_win.win].winfixwidth, false, "per-call winfixwidth should correct the window")
 
 vim.g.loaded_codex_nvim = 1
 

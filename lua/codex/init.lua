@@ -19,6 +19,7 @@ local defaults = {
     width = 0.4,
     wo = {
       winbar = "",
+      winfixwidth = false,
     },
   },
   terminal = {},
@@ -453,15 +454,38 @@ local function codex_winbar(cwd, selected_count)
   return render_winbar(counts_with_selected(cwd, selected_count), selected_count)
 end
 
-local function set_window_winbar(win, winbar)
+local function set_window_option(win, name, value)
   if type(win) ~= "number" or not vim.api.nvim_win_is_valid(win) then
     return
   end
 
   if type(vim.api.nvim_set_option_value) == "function" then
-    pcall(vim.api.nvim_set_option_value, "winbar", winbar, { win = win })
+    pcall(vim.api.nvim_set_option_value, name, value, { win = win })
   else
-    pcall(vim.api.nvim_win_set_option, win, "winbar", winbar)
+    pcall(vim.api.nvim_win_set_option, win, name, value)
+  end
+end
+
+local function set_window_winbar(win, winbar)
+  set_window_option(win, "winbar", winbar)
+end
+
+local function preserve_window_option(win, name)
+  local value = win.wo[name]
+  local on_win = win.on_win
+
+  win.on_win = function(snacks_win)
+    if type(snacks_win) == "table" then
+      if type(snacks_win.opts) == "table" then
+        snacks_win.opts.wo = type(snacks_win.opts.wo) == "table" and snacks_win.opts.wo or {}
+        snacks_win.opts.wo[name] = value
+      end
+      set_window_option(snacks_win.win, name, value)
+    end
+
+    if type(on_win) == "function" then
+      return on_win(snacks_win)
+    end
   end
 end
 
@@ -488,6 +512,8 @@ local function build_terminal_opts(opts, cwd, count)
   end
   win.wo = wo
   win.wo.winbar = codex_winbar(cwd, count)
+  -- Snacks forces fixed dimensions for split windows after merging config.
+  preserve_window_option(win, "winfixwidth")
 
   return vim.tbl_deep_extend("force", {}, opts.terminal or {}, {
     cwd = cwd,
