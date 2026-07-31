@@ -115,6 +115,7 @@ require("codex").setup({
     relative = "editor",
     width = 0.4,
     wo = {
+      winhighlight = "Normal:NormalFloat",
       winfixwidth = false,
     },
   },
@@ -130,7 +131,7 @@ Supported options:
 - `count`: first Snacks terminal count for each directory. Defaults to `1`.
 - `on_notification`: optional callback for OSC 9 notifications. Defaults to `nil`.
 - `keys`: terminal-local session keys. Set an entry to `false` to disable it.
-- `win`: options merged into the Snacks window config. Defaults include `win.wo.winfixwidth = false`; only `win.wo.winbar` is reserved and managed by `codex.nvim`.
+- `win`: options merged into the Snacks window config. Defaults include `win.wo.winhighlight = "Normal:NormalFloat"` and `win.wo.winfixwidth = false`; only `win.wo.winbar` is reserved and managed by `codex.nvim`.
 - `terminal`: options merged into the Snacks terminal config.
 
 When more than one session exists for the current directory, Codex terminal

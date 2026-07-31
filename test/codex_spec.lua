@@ -205,6 +205,11 @@ assert_eq(calls[1].opts.win.width, 0.4, "default terminal width should be 40 per
 assert_eq(type(calls[1].opts.win.wo.winbar), "string", "Codex winbar should be a static string")
 assert_eq(calls[1].opts.win.wo.winbar:find("%{", 1, true), nil, "Codex winbar should not be an expression")
 assert_eq(calls[1].opts.win.wo.winbar, "", "default terminal winbar should be hidden for one session")
+assert_eq(
+  calls[1].opts.win.wo.winhighlight,
+  "Normal:NormalFloat",
+  "default terminal background should use NormalFloat"
+)
 assert_eq(calls[1].opts.win.wo.winfixwidth, false, "default terminal width should remain adjustable")
 local default_snacks_win = simulate_snacks_on_win(calls[1], true)
 assert_eq(default_snacks_win.opts.wo.winfixwidth, false, "Codex should correct Snacks' stored split default")
@@ -241,6 +246,7 @@ codex.setup({
       q = "hide",
     },
     wo = {
+      winhighlight = "Normal:CursorLine",
       winfixwidth = true,
     },
   },
@@ -268,6 +274,11 @@ assert_eq(calls[2].opts.count, 4, "configured count should be passed to Snacks")
 assert_eq(calls[2].opts.win.position, "left", "per-call win config should merge")
 assert_eq(calls[2].opts.win.width, 0.5, "configured win config should be preserved")
 assert_eq(calls[2].opts.win.wo.winbar, "", "Codex winbar should stay hidden when win config merges")
+assert_eq(
+  calls[2].opts.win.wo.winhighlight,
+  "Normal:CursorLine",
+  "configured winhighlight should override the default"
+)
 assert_eq(calls[2].opts.win.wo.winfixwidth, true, "configured winfixwidth should override the default")
 local configured_snacks_win = simulate_snacks_on_win(calls[2], true)
 assert_eq(configured_on_win, configured_snacks_win, "configured on_win callback should be preserved")
@@ -285,6 +296,7 @@ assert_eq(calls[2].opts.auto_close, false, "Snacks auto_close should stay disabl
 codex.toggle({
   win = {
     wo = {
+      winhighlight = "Normal:ErrorMsg",
       winbar = "Codex",
       winfixwidth = false,
     },
@@ -306,6 +318,11 @@ assert_list(
   "the plugin notification override should follow and take precedence over configured arguments"
 )
 assert_eq(calls[3].opts.win.wo.winbar, "", "Codex should clear a per-call winbar for one session")
+assert_eq(
+  calls[3].opts.win.wo.winhighlight,
+  "Normal:ErrorMsg",
+  "per-call winhighlight should override setup"
+)
 assert_eq(calls[3].opts.win.wo.winfixwidth, false, "per-call winfixwidth should override setup")
 local per_call_snacks_win = simulate_snacks_on_win(calls[3], true)
 assert_eq(per_call_snacks_win.opts.wo.winfixwidth, false, "per-call winfixwidth should correct Snacks' stored value")

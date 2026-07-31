@@ -18,6 +18,7 @@ local defaults = {
     relative = "editor",
     width = 0.4,
     wo = {
+      winhighlight = "Normal:NormalFloat",
       winbar = "",
       winfixwidth = false,
     },
