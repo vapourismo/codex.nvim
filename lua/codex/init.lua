@@ -2,7 +2,7 @@ local M = {}
 
 local defaults = {
   command = "codex",
-  args = {},
+  args = { "--config", 'tui.notification_method="osc9"' },
   cwd = function()
     return vim.fn.getcwd()
   end,
@@ -328,21 +328,7 @@ end
 
 local function build_command(opts)
   local cmd = { opts.command }
-  local notification_config = { "--config", 'tui.notification_method="osc9"' }
-  local inserted_notification_config = false
-
-  for _, arg in ipairs(opts.args or {}) do
-    if arg == "--" and not inserted_notification_config then
-      vim.list_extend(cmd, notification_config)
-      inserted_notification_config = true
-    end
-    table.insert(cmd, arg)
-  end
-
-  if not inserted_notification_config then
-    vim.list_extend(cmd, notification_config)
-  end
-
+  vim.list_extend(cmd, opts.args)
   return cmd
 end
 

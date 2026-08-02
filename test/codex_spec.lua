@@ -194,7 +194,7 @@ assert_eq(#calls, 1, "toggle should call Snacks once")
 assert_list(
   calls[1].cmd,
   { "codex", "--config", OSC9_CONFIG },
-  "default command should force OSC 9 notifications"
+  "default args should enable OSC 9 notifications"
 )
 assert_eq(calls[1].opts.cwd, original_cwd, "default cwd should resolve to current working directory")
 assert_eq(calls[1].opts.count, 1, "default count should be stable")
@@ -266,8 +266,8 @@ codex.toggle({
 assert_eq(#calls, 2, "second toggle should call Snacks again")
 assert_list(
   calls[2].cmd,
-  { "codex", "exec", "hello", "--config", OSC9_CONFIG, "--", "prompt" },
-  "the notification override should follow per-call args and precede the delimiter"
+  { "codex", "exec", "hello", "--", "prompt" },
+  "per-call args should pass through unchanged, including the delimiter"
 )
 assert_eq(calls[2].opts.cwd, normalize_cwd("/tmp/project"), "per-call cwd should win")
 assert_eq(calls[2].opts.count, 4, "configured count should be passed to Snacks")
@@ -312,10 +312,8 @@ assert_list(
     'tui.notification_method="bel"',
     "--model",
     "gpt-5",
-    "--config",
-    OSC9_CONFIG,
   },
-  "the plugin notification override should follow and take precedence over configured arguments"
+  "configured args should replace the defaults and pass through unchanged"
 )
 assert_eq(calls[3].opts.win.wo.winbar, "", "Codex should clear a per-call winbar for one session")
 assert_eq(
@@ -350,7 +348,7 @@ assert_eq(#calls, 4, "toggle should still work after deactivate")
 assert_list(
   calls[4].cmd,
   { "codex", "--config", OSC9_CONFIG },
-  "deactivate should reset configured args and retain the notification override"
+  "deactivate should restore the default notification args"
 )
 assert_eq(calls[4].opts.cwd, original_cwd, "deactivate should reset cwd")
 assert_eq(calls[4].opts.count, 1, "deactivate should reset count")
@@ -1041,7 +1039,7 @@ vim.api.nvim_create_autocmd("User", {
 
 reloaded_codex.deactivate()
 reloaded_codex.setup({
-  args = { "--unobserved-test" },
+  args = { "--unobserved-test", "--config", OSC9_CONFIG },
   cwd = dir_a,
   count = 6,
 })
@@ -1060,7 +1058,7 @@ local notification_calls = {}
 original_stdout_calls = {}
 reloaded_codex.deactivate()
 reloaded_codex.setup({
-  args = { "--notification-test" },
+  args = { "--notification-test", "--config", OSC9_CONFIG },
   cwd = dir_a,
   count = 6,
   on_notification = function(data)
@@ -1079,7 +1077,7 @@ assert_eq(unrelated_launch_opts, unrelated_opts, "unrelated commands should reta
 assert_list(
   launched.cmd,
   { "codex", "--notification-test", "--config", OSC9_CONFIG },
-  "notification launches should include the OSC 9 override"
+  "custom notification args should explicitly include the OSC 9 configuration"
 )
 assert_eq(#notification_autocmds(observed_terminal.buf), 1, "notification terminals should attach one handler")
 
@@ -1133,7 +1131,11 @@ assert_contains(tostring(invalid_err), "on_notification must be a function", "in
 
 local per_call_notifications = {}
 reloaded_codex.deactivate()
-reloaded_codex.setup({ args = { "--per-call-notification-test" }, cwd = dir_b, count = 7 })
+reloaded_codex.setup({
+  args = { "--per-call-notification-test", "--config", OSC9_CONFIG },
+  cwd = dir_b,
+  count = 7,
+})
 local per_call_terminal = reloaded_codex.toggle({
   on_notification = function(data)
     per_call_notifications[#per_call_notifications + 1] = vim.deepcopy(data)

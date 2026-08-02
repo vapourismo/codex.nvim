@@ -72,7 +72,10 @@ its own active Codex session list.
     "folke/snacks.nvim",
   },
   opts = {
-    args = { "--model", "gpt-5" },
+    args = {
+      "--config",
+      'tui.notification_method="osc9"',
+    },
     cwd = function()
       return vim.fn.getcwd()
     end,
@@ -94,7 +97,7 @@ You can also call setup directly:
 ```lua
 require("codex").setup({
   command = "codex",
-  args = {},
+  args = { "--config", 'tui.notification_method="osc9"' },
   cwd = function()
     return vim.fn.getcwd()
   end,
@@ -126,7 +129,7 @@ require("codex").setup({
 Supported options:
 
 - `command`: executable name or path. Defaults to `"codex"`.
-- `args`: command arguments. Defaults to `{}`.
+- `args`: command arguments. Defaults to `{ "--config", 'tui.notification_method="osc9"' }`.
 - `cwd`: working directory string or function returning a string. Defaults to `vim.fn.getcwd()`.
 - `count`: first Snacks terminal count for each directory. Defaults to `1`.
 - `on_notification`: optional callback for OSC 9 notifications. Defaults to `nil`.
@@ -144,7 +147,12 @@ Programmatic usage:
 ```lua
 require("codex").toggle({
   cwd = vim.fn.getcwd(),
-  args = { "--ask-for-approval", "on-request" },
+  args = {
+    "--config",
+    'tui.notification_method="osc9"',
+    "--ask-for-approval",
+    "on-request",
+  },
 })
 
 require("codex").new()
@@ -158,10 +166,13 @@ require("codex").reference() -- call from characterwise or linewise Visual mode
 
 On Neovim 0.10 or newer, `codex.nvim` uses the buffer-local `TermRequest`
 event to call `on_notification` for direct OSC 9 notifications from Codex.
-Every generated command automatically includes
-`--config 'tui.notification_method="osc9"'` after user arguments and before any
-`--` delimiter. This launch-time override takes precedence over earlier Codex
-configuration, so no persistent `config.toml` setting is needed.
+The default `args` enable these notifications with
+`--config 'tui.notification_method="osc9"'`, so no persistent `config.toml`
+setting is needed.
+
+Setup-level and per-call `args` replace the defaults and are passed to Codex
+unchanged. If you customize `args` and want OSC 9 notifications, include the
+notification configuration explicitly, before any `--` delimiter.
 
 Standalone BEL bytes, unrelated terminal requests, and tmux-wrapped DCS
 sequences are ignored. Terminal stdout callbacks are left unchanged. When
